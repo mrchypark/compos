@@ -1,0 +1,185 @@
+name: publish compos CLI
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, for example v0.1.0"
+        required: true
+      prerelease:
+        description: "Mark the publish repo release as a prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  publish-cli:
+    if: ${{ false }} # Configure private publishing before enabling.
+
+    runs-on: ubuntu-24.04
+    env:
+      PUBLISH_REPO: mrchypark/compos
+      GH_TOKEN: ${{ secrets.COMPOS_PUBLISH_TOKEN }}
+      VERSION_INPUT: ${{ inputs.version }}
+      PRERELEASE_INPUT: ${{ inputs.prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Validate publish inputs
+        id: publish
+        shell: sh
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "COMPOS_PUBLISH_TOKEN secret is required" >&2
+            exit 1
+          fi
+
+          raw_version="${VERSION_INPUT:-$GITHUB_REF_NAME}"
+          case "$raw_version" in
+            compos/v*) raw_version="${raw_version#compos/}" ;;
+          esac
+          case "$raw_version" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "version must look like vX.Y.Z; got $raw_version" >&2
+              exit 1
+              ;;
+          esac
+
+          asset_version="${raw_version#v}"
+          publish_tag="compos/$raw_version"
+          prerelease=false
+          case "$asset_version" in
+            *-*) prerelease=true ;;
+          esac
+          if [ "${PRERELEASE_INPUT:-false}" = "true" ]; then
+            prerelease=true
+          fi
+
+          {
+            echo "raw_version=$raw_version"
+            echo "asset_version=$asset_version"
+            echo "publish_tag=$publish_tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source tag
+        shell: sh
+        env:
+          RAW_VERSION: ${{ steps.publish.outputs.raw_version }}
+        run: |
+          git fetch --force --tags origin "refs/tags/$RAW_VERSION:refs/tags/$RAW_VERSION"
+          tag_commit="$(git rev-parse --verify "refs/tags/$RAW_VERSION^{commit}")"
+          git checkout --detach "$tag_commit"
+          echo "checked out $RAW_VERSION at $tag_commit"
+
+      - name: Test CLI package
+        run: go test ./...
+
+      - name: Build CLI packages
+        shell: sh
+        env:
+          ASSET_VERSION: ${{ steps.publish.outputs.asset_version }}
+        run: |
+          rm -rf dist
+          mkdir -p dist
+          while read -r goos goarch package_os; do
+            [ -n "$goos" ] || continue
+            echo "building $package_os/$goarch"
+            COMPOS_PACKAGE_VERSION="$ASSET_VERSION" \
+              COMPOS_PACKAGE_OS="$package_os" \
+              GOOS="$goos" \
+              GOARCH="$goarch" \
+              CGO_ENABLED=0 \
+              DIST_DIR="$PWD/dist" \
+              scripts/package-cli.sh
+          done <<'PLATFORMS'
+          linux amd64 linux
+          linux arm64 linux
+          darwin amd64 macos
+          darwin arm64 macos
+          windows amd64 windows
+          PLATFORMS
+
+          (cd dist && sha256sum compos_*.tar.gz > SHA256SUMS)
+
+      - name: Write release notes
+        shell: sh
+        env:
+          RAW_VERSION: ${{ steps.publish.outputs.raw_version }}
+          ASSET_VERSION: ${{ steps.publish.outputs.asset_version }}
+        run: |
+          release_date="$(date -u +%Y-%m-%d)"
+          source_commit="$(git rev-parse HEAD)"
+          cat > dist/release-notes.md <<EOF
+          # compos CLI $ASSET_VERSION
+
+          - Source repository: https://github.com/mrchypark/compos
+          - Source commit: $source_commit
+          - Build date: $release_date UTC
+          - Publish tag: compos/$RAW_VERSION
+          - Supported assets: linux/amd64, linux/arm64, macos/amd64, macos/arm64, windows/amd64
+          - Signing status: unsigned; verify SHA256SUMS from this release.
+
+          ## Install
+
+          Download the matching \`compos_${ASSET_VERSION}_<os>_<arch>.tar.gz\` asset, extract it, and run \`bin/compos version\`.
+
+          ## Rollback
+
+          Install the previous \`compos/vX.Y.Z\` release asset from this repository.
+          EOF
+
+      - name: Publish to mrchypark/compos
+        shell: sh
+        env:
+          PUBLISH_TAG: ${{ steps.publish.outputs.publish_tag }}
+          ASSET_VERSION: ${{ steps.publish.outputs.asset_version }}
+          PRERELEASE: ${{ steps.publish.outputs.prerelease }}
+        run: |
+          prerelease_flag=""
+          if [ "$PRERELEASE" = "true" ]; then
+            prerelease_flag="--prerelease"
+          fi
+
+          if gh release view "$PUBLISH_TAG" --repo "$PUBLISH_REPO" >/dev/null 2>&1; then
+            gh release edit "$PUBLISH_TAG" \
+              --repo "$PUBLISH_REPO" \
+              --title "compos $ASSET_VERSION" \
+              --notes-file dist/release-notes.md \
+              $prerelease_flag
+            gh release upload "$PUBLISH_TAG" dist/compos_*.tar.gz dist/SHA256SUMS \
+              --repo "$PUBLISH_REPO" \
+              --clobber
+          else
+            gh release create "$PUBLISH_TAG" dist/compos_*.tar.gz dist/SHA256SUMS \
+              --repo "$PUBLISH_REPO" \
+              --title "compos $ASSET_VERSION" \
+              --notes-file dist/release-notes.md \
+              $prerelease_flag
+          fi
+
+      - name: Build summary
+        run: |
+          {
+            echo "## Compos CLI publish"
+            echo
+            echo "- repo: ${{ env.PUBLISH_REPO }}"
+            echo "- tag: ${{ steps.publish.outputs.publish_tag }}"
+            echo "- version: ${{ steps.publish.outputs.asset_version }}"
+            echo "- prerelease: ${{ steps.publish.outputs.prerelease }}"
+          } >> "$GITHUB_STEP_SUMMARY"

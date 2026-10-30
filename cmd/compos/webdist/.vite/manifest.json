@@ -1,0 +1,10 @@
+{
+  "app": {
+    "file": "assets/app-B9pGPPjz.js",
+    "name": "app",
+    "isEntry": true,
+    "css": [
+      "assets/app-DOeE3vg_.css"
+    ]
+  }
+}

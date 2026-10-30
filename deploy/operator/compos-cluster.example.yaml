@@ -1,0 +1,22 @@
+apiVersion: compos.mrchypark.dev/v1alpha1
+kind: ComposCluster
+metadata:
+  name: compos
+spec:
+  replicas: 3
+  server:
+    # Replace with the immutable GAR tag printed by the build-images workflow.
+    image: REGISTRY_HOST/PROJECT/REPOSITORY/compos-server:YYYYMMDD-SHORT_SHA
+    envSecret: compos-env
+    rhiza:
+      clusterId: compos
+      peerPort: 8100
+      adminTokenSecretRef: compos-env
+  objectStore:
+    provider: s3
+    endpoint: storage.googleapis.com
+    bucket: compos-rhiza
+    prefix: production/compos
+    region: auto
+    insecure: false
+    secretRef: compos-env

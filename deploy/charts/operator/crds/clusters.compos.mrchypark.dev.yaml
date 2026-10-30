@@ -1,0 +1,169 @@
+{
+  "apiVersion": "apiextensions.k8s.io/v1",
+  "kind": "CustomResourceDefinition",
+  "metadata": {
+    "name": "clusters.compos.mrchypark.dev"
+  },
+  "spec": {
+    "group": "compos.mrchypark.dev",
+    "names": {
+      "categories": [],
+      "kind": "ComposCluster",
+      "plural": "clusters",
+      "shortNames": [
+        "cc"
+      ],
+      "singular": "composcluster"
+    },
+    "scope": "Namespaced",
+    "versions": [
+      {
+        "additionalPrinterColumns": [],
+        "name": "v1alpha1",
+        "schema": {
+          "openAPIV3Schema": {
+            "description": "Auto-generated derived type for ComposClusterSpec via `CustomResource`",
+            "properties": {
+              "spec": {
+                "properties": {
+                  "imagePullPolicy": {
+                    "default": "IfNotPresent",
+                    "type": "string"
+                  },
+                  "objectStore": {
+                    "default": {
+                      "bucket": "compos-rhiza",
+                      "endpoint": "rustfs:9000",
+                      "insecure": true,
+                      "prefix": "compos",
+                      "provider": "s3",
+                      "region": "us-east-1",
+                      "secretRef": "compos-env"
+                    },
+                    "properties": {
+                      "bucket": {
+                        "default": "compos-rhiza",
+                        "type": "string"
+                      },
+                      "endpoint": {
+                        "default": "rustfs:9000",
+                        "type": "string"
+                      },
+                      "insecure": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "prefix": {
+                        "default": "compos",
+                        "type": "string"
+                      },
+                      "provider": {
+                        "default": "s3",
+                        "type": "string"
+                      },
+                      "region": {
+                        "default": "us-east-1",
+                        "type": "string"
+                      },
+                      "secretRef": {
+                        "default": "compos-env",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "replicas": {
+                    "default": 3,
+                    "format": "int32",
+                    "type": "integer"
+                  },
+                  "server": {
+                    "properties": {
+                      "envSecret": {
+                        "default": "compos-env",
+                        "type": "string"
+                      },
+                      "image": {
+                        "type": "string"
+                      },
+                      "port": {
+                        "default": 7878,
+                        "format": "int32",
+                        "type": "integer"
+                      },
+                      "rhiza": {
+                        "default": {
+                          "adminTokenSecretRef": "compos-env",
+                          "clusterId": "compos",
+                          "peerPort": 8100
+                        },
+                        "properties": {
+                          "adminTokenSecretRef": {
+                            "default": "compos-env",
+                            "type": "string"
+                          },
+                          "clusterId": {
+                            "default": "compos",
+                            "type": "string"
+                          },
+                          "peerPort": {
+                            "default": 8100,
+                            "format": "int32",
+                            "type": "integer"
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "image"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "server"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "nullable": true,
+                "properties": {
+                  "lastError": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "observedGeneration": {
+                    "format": "int64",
+                    "nullable": true,
+                    "type": "integer"
+                  },
+                  "phase": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "readyReplicas": {
+                    "format": "int32",
+                    "nullable": true,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "spec"
+            ],
+            "title": "ComposCluster",
+            "type": "object"
+          }
+        },
+        "served": true,
+        "storage": true,
+        "subresources": {
+          "status": {}
+        }
+      }
+    ]
+  }
+}

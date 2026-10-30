@@ -1,0 +1,175 @@
+name: build and push compos images
+
+on:
+  workflow_run:
+    workflows: ["test compos"]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  docker:
+    if: ${{ false }} # Configure private image publishing before enabling.
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        image:
+          - application-name: compos-server
+            target: server
+          - application-name: compos-cli
+            target: cli
+          - application-name: compos-operator
+            target: operator
+          - application-name: compos-search-syncer
+            target: search-syncer
+    steps:
+      - name: Get current date
+        id: date
+        run: echo "date=$(TZ=Asia/Seoul date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          fetch-depth: 0
+
+      - name: Download image path gate
+        if: github.event_name != 'workflow_dispatch'
+        uses: actions/download-artifact@v8.0.1
+        continue-on-error: true
+        with:
+          name: image-path-gate
+          path: path-gate
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Image path gate
+        id: image_paths
+        if: github.event_name != 'workflow_dispatch'
+        shell: sh
+        env:
+          BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha || '' }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.workflow_run.after || github.sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ -z "$HEAD_SHA" ] || ! git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
+            echo "image path gate: missing head; skipping automatic publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$HEAD_BRANCH" = "$DEFAULT_BRANCH" ]; then
+            # workflow_run omits the push "before"; test uploads it from the original push event.
+            gate_file=path-gate/image-path-gate.env
+            if [ ! -f "$gate_file" ]; then
+              echo "image path gate: missing push range; skipping automatic publish"
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            push_base="$(sed -n 's/^base=//p' "$gate_file" | sed -n '1p')"
+            push_before="$(sed -n 's/^before=//p' "$gate_file" | sed -n '1p')"
+            push_head="$(sed -n 's/^head=//p' "$gate_file" | sed -n '1p')"
+            push_after="$(sed -n 's/^after=//p' "$gate_file" | sed -n '1p')"
+            compare_base="${push_base:-$push_before}"
+            compare_head="${push_head:-${push_after:-$HEAD_SHA}}"
+            if [ -z "$compare_head" ] || ! git cat-file -e "$compare_head^{commit}" 2>/dev/null; then
+              echo "image path gate: missing push head; skipping automatic publish"
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            case "$compare_base" in
+              ""|0000000000000000000000000000000000000000)
+                compare_base="$(git hash-object -t tree /dev/null)"
+                ;;
+              *)
+                if ! git cat-file -e "$compare_base^{commit}" 2>/dev/null; then
+                  echo "image path gate: missing push base; skipping automatic publish"
+                  echo "publish=false" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                ;;
+            esac
+            if git diff --name-only "$compare_base" "$compare_head" | grep -Eq '^(Cargo\.(toml|lock)|go\.(mod|sum)|cmd/|internal/|crates/|Dockerfile$)'; then
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          compare_base=""
+          if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            compare_base="$BASE_SHA"
+          else
+            git fetch --no-tags origin "$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+            compare_base="$(git merge-base "origin/$DEFAULT_BRANCH" "$HEAD_SHA" || true)"
+          fi
+          if [ -z "$compare_base" ] || ! git cat-file -e "$compare_base^{commit}" 2>/dev/null; then
+            echo "image path gate: missing comparable base; skipping automatic publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$compare_base" "$HEAD_SHA" | grep -Eq '^(Cargo\.(toml|lock)|go\.(mod|sum)|cmd/|internal/|crates/|Dockerfile$)'; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: github.event_name == 'workflow_dispatch' || steps.image_paths.outputs.publish == 'true'
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Login to Google Artifact Registry
+        if: github.event_name == 'workflow_dispatch' || steps.image_paths.outputs.publish == 'true'
+        uses: docker/login-action@v4.4.0
+        with:
+          registry: ${{ secrets.GCP_REGISTRY_HOST }}
+          username: _json_key
+          password: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Docker meta
+        id: meta
+        if: github.event_name == 'workflow_dispatch' || steps.image_paths.outputs.publish == 'true'
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: |
+            name=${{ secrets.GCP_REGISTRY_HOST }}/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_REPOSITORY }}/${{ matrix.image.application-name }}
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,enable=true,priority=600,prefix=,suffix=,event=tag
+            type=sha,enable=true,priority=100,prefix={{date 'YYYYMMDD' tz='Asia/Seoul'}}-,suffix=,format=short
+
+      - name: Build and push
+        if: github.event_name == 'workflow_dispatch' || steps.image_paths.outputs.publish == 'true'
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: Dockerfile
+          target: ${{ matrix.image.target }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image.application-name }}-build
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.application-name }}-build
+          build-args: |
+            IMAGE_TAGS=${{ steps.meta.outputs.version }}
+            BUILD_HASH=${{ github.event.workflow_run.head_sha || github.sha }}
+            BUILD_BRANCH=${{ github.event.workflow_run.head_branch || github.ref_name }}
+            BUILD_DATE=${{ steps.date.outputs.date }}
+            BUILDER="${{ github.actor }}"
+            BUILD_VERSION="${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}"
+
+      - name: Build summary
+        if: github.event_name == 'workflow_dispatch' || steps.image_paths.outputs.publish == 'true'
+        run: |
+          {
+            echo "## Build outputs"
+            echo
+            echo "- image: ${{ matrix.image.application-name }}"
+            echo "- target: ${{ matrix.image.target }}"
+            echo "- image_version: ${{ steps.meta.outputs.version }}"
+            echo "- image_tags:"
+            echo '```'
+            echo '${{ steps.meta.outputs.tags }}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

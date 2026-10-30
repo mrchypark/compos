@@ -1,0 +1,29 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: compos-operator
+  labels:
+    app.kubernetes.io/name: compos-operator
+    app.kubernetes.io/instance: {{ .Release.Name }}
+rules:
+  - apiGroups: ["compos.mrchypark.dev"]
+    resources: ["clusters", "searchsyncers"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["compos.mrchypark.dev"]
+    resources: ["clusters/status", "searchsyncers/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["configmaps", "services"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "patch", "create"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]

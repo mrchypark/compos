@@ -1,0 +1,272 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: compos-conductor
+  labels:
+    app.kubernetes.io/part-of: compos-conductor
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: compos-rhiza-gcs
+  namespace: compos-conductor
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: compos
+  namespace: compos-conductor
+spec:
+  selector:
+    app.kubernetes.io/name: compos
+  ports:
+    - name: http
+      port: 7878
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compos
+  namespace: compos-conductor
+  labels:
+    app.kubernetes.io/name: compos
+    app.kubernetes.io/version: rhiza-0.19.0
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: compos
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: compos
+        app.kubernetes.io/part-of: compos-conductor
+        app.kubernetes.io/version: rhiza-0.19.0
+    spec:
+      serviceAccountName: compos-rhiza-gcs
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: compos
+          image: registry.example.invalid/compos/compos-server@sha256:9fd68cc7cd6aa41463e97eff81e87c644ae0d3304f0bc4ca43bd7147645776f9
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 7878
+          env:
+            - name: COMPOS_BIND
+              value: 0.0.0.0:7878
+            - name: COMPOS_RHIZA_DATA_DIR
+              value: /data/rhiza
+            - name: COMPOS_RHIZA_CLUSTER_ID
+              value: v019-20261008-rehearsal3
+            - name: COMPOS_RHIZA_NODE_ID
+              value: compos-v019-rehearsal3-0
+            # Promoted, verified migration target: compos/v019-20261008-rehearsal3/...
+            - name: COMPOS_RHIZA_OBJECT_PREFIX
+              value: compos
+            - name: COMPOS_RHIZA_OBJECT_PROVIDER
+              value: gcs
+            - name: COMPOS_RHIZA_OBJECT_BUCKET
+              value: compos-prod-602454948273-20260815
+            - name: COMPOS_RHIZA_OBJECT_DURABILITY
+              value: before-ack
+            - name: COMPOS_AUTH_MODE
+              value: pocketbase
+            - name: COMPOS_POCKETBASE_URL
+              value: http://patch-data.patch.svc.cluster.local:8090
+            - name: COMPOS_POCKETBASE_AUTH_COLLECTION
+              value: users
+            - name: COMPOS_AUTH_ALLOWED_EMAIL_DOMAINS
+              value: example.invalid
+            - name: COMPOS_BOOTSTRAP_WORKSPACE_NAME
+              value: Compos
+            - name: COMPOS_SEARCH_SYNCER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: compos-syncer-auth
+                  key: compos-token
+            - name: COMPOS_MEILISEARCH_URL
+              value: http://meilisearch.compos.svc.cluster.local:7700
+            - name: COMPOS_MEILISEARCH_INDEX_UID
+              value: compos-tg900-objects
+            - name: COMPOS_MEILISEARCH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: compos-search-auth
+                  key: meilisearch-search-key
+            - name: COMPOS_CONDUCTOR_URL
+              value: http://conductor:8080
+            - name: COMPOS_CONDUCTOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: compos-conductor-auth
+                  key: service-token
+            - name: COMPOS_CONDUCTOR_CALLBACK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: compos-conductor-auth
+                  key: callback-token
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conductor
+  namespace: compos-conductor
+spec:
+  selector:
+    app.kubernetes.io/name: conductor
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conductor
+  namespace: compos-conductor
+  labels:
+    app.kubernetes.io/name: conductor
+    app.kubernetes.io/version: dcc7af2
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: conductor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: conductor
+        app.kubernetes.io/part-of: compos-conductor
+        app.kubernetes.io/version: dcc7af2
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: conductor
+          image: registry.example.invalid/compos/conductor@sha256:761aa89b0ad2f3d583d19611cfac6262ae30a7fcc2260d4b59838f351e217062
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: CONDUCTOR_ADDR
+              value: 0.0.0.0:8080
+            - name: CONDUCTOR_DB
+              value: /data
+            - name: CONDUCTOR_WORKER_ID
+              value: conductor-0
+            - name: CONDUCTOR_CALLBACK_URL
+              value: http://compos:7878/internal/v1/conductor/callbacks
+            - name: CONDUCTOR_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: compos-conductor-auth
+                  key: service-token
+            - name: CONDUCTOR_CALLBACK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: compos-conductor-auth
+                  key: callback-token
+            - name: CONDUCTOR_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: compos-conductor-auth
+                  key: master-key
+            - name: CONDUCTOR_OAUTH_CLIENT_SECRET_SLACK
+              valueFrom:
+                secretKeyRef:
+                  name: compos-conductor-auth
+                  key: slack-oauth-client-secret
+            - name: COMPOS_BASE_URL
+              value: http://compos:7878
+            - name: COMPOS_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: compos-conductor-auth
+                  key: service-token
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

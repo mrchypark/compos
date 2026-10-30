@@ -1,0 +1,201 @@
+{
+  "apiVersion": "apiextensions.k8s.io/v1",
+  "kind": "CustomResourceDefinition",
+  "metadata": {
+    "name": "searchsyncers.compos.mrchypark.dev"
+  },
+  "spec": {
+    "group": "compos.mrchypark.dev",
+    "names": {
+      "categories": [],
+      "kind": "ComposSearchSyncer",
+      "plural": "searchsyncers",
+      "shortNames": [
+        "css"
+      ],
+      "singular": "compossearchsyncer"
+    },
+    "scope": "Namespaced",
+    "versions": [
+      {
+        "additionalPrinterColumns": [],
+        "name": "v1alpha1",
+        "schema": {
+          "openAPIV3Schema": {
+            "description": "Auto-generated derived type for ComposSearchSyncerSpec via `CustomResource`",
+            "properties": {
+              "spec": {
+                "properties": {
+                  "compos": {
+                    "properties": {
+                      "authSecretRef": {
+                        "nullable": true,
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "name"
+                        ],
+                        "type": "object"
+                      },
+                      "endpoint": {
+                        "type": "string"
+                      },
+                      "workspaceId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "endpoint",
+                      "workspaceId"
+                    ],
+                    "type": "object"
+                  },
+                  "index": {
+                    "default": {
+                      "primaryKey": "id",
+                      "uid": "compos-objects"
+                    },
+                    "properties": {
+                      "primaryKey": {
+                        "default": "id",
+                        "type": "string"
+                      },
+                      "uid": {
+                        "default": "compos-objects",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "meilisearch": {
+                    "default": {
+                      "ephemeralStorage": "512Mi",
+                      "image": "meilisearch/meilisearch:v1.12",
+                      "masterKeySecretRef": null,
+                      "replicas": 1,
+                      "resources": null
+                    },
+                    "properties": {
+                      "ephemeralStorage": {
+                        "default": "512Mi",
+                        "type": "string"
+                      },
+                      "image": {
+                        "default": "meilisearch/meilisearch:v1.12",
+                        "type": "string"
+                      },
+                      "masterKeySecretRef": {
+                        "nullable": true,
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "name"
+                        ],
+                        "type": "object"
+                      },
+                      "replicas": {
+                        "default": 1,
+                        "format": "int32",
+                        "type": "integer"
+                      },
+                      "resources": {}
+                    },
+                    "type": "object"
+                  },
+                  "sync": {
+                    "default": {
+                      "batchSize": 100,
+                      "intervalSeconds": 5
+                    },
+                    "properties": {
+                      "batchSize": {
+                        "default": 100,
+                        "format": "uint32",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      },
+                      "intervalSeconds": {
+                        "default": 5,
+                        "format": "uint64",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "syncer": {
+                    "properties": {
+                      "image": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "image"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "compos",
+                  "syncer"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "nullable": true,
+                "properties": {
+                  "lastError": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "meilisearchReady": {
+                    "nullable": true,
+                    "type": "boolean"
+                  },
+                  "observedGeneration": {
+                    "format": "int64",
+                    "nullable": true,
+                    "type": "integer"
+                  },
+                  "phase": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "syncerReady": {
+                    "nullable": true,
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "spec"
+            ],
+            "title": "ComposSearchSyncer",
+            "type": "object"
+          }
+        },
+        "served": true,
+        "storage": true,
+        "subresources": {
+          "status": {}
+        }
+      }
+    ]
+  }
+}
