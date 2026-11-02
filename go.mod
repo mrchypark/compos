@@ -9,7 +9,6 @@ require (
 	github.com/mrchypark/rhiza v0.19.0
 	github.com/ncruces/go-sqlite3 v0.35.3
 	go.etcd.io/bbolt v1.5.0
-	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

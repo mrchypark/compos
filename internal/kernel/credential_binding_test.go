@@ -50,12 +50,10 @@ func TestCredentialPinRejectsLossyJSONRevision(t *testing.T) {
 				if _, err := db.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := db.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-					t.Fatal(err)
-				}
+
 			}
 			defer db.Close()
-			executor := NewStoreExecutor(db)
+			executor := testStoreExecutor(db)
 			publish := func(id, kind, revision string) Command {
 				spec := `{"name":"Send","input_schema":{"type":"object"},"output_schema":{"type":"object"},"binding":{"kind":"connector","handler_version":"1","provider":"slack","operation":"chat.postMessage","connection_id":"conn_1","credential_revision":` + revision + `}}`
 				if kind == "participant" {
@@ -131,12 +129,10 @@ func TestCredentialPinSnapshotsFunctionAcrossStores(t *testing.T) {
 				if _, err := db.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := db.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-					t.Fatal(err)
-				}
+
 			}
 			defer db.Close()
-			executor := NewStoreExecutor(db)
+			executor := testStoreExecutor(db)
 			task := execute(t, executor, "dev", command("credential_function_task", "credential_function_task", "spec.publish", "spec_revision", nil, map[string]any{"family_id": "credential-function-task", "revision": 1, "kind": "task", "spec": map[string]any{"name": "Credential task", "goal": "Use pinned credential", "input_schema": map[string]any{"type": "object"}, "output_schema": map[string]any{"type": "object"}, "completion": map[string]any{"kind": "submission_valid"}}}))
 			function := execute(t, executor, "dev", command("credential_function", "credential_function", "spec.publish", "spec_revision", nil, map[string]any{"family_id": "credential-function", "revision": 1, "kind": "function", "spec": map[string]any{"name": "Send", "input_schema": map[string]any{"type": "object"}, "output_schema": map[string]any{"type": "object"}, "binding": map[string]any{"kind": "connector", "handler_version": "1", "provider": "slack", "operation": "chat.postMessage", "connection_id": "conn_1", "credential_revision": 7}}}))
 			work := execute(t, executor, "dev", command("credential_function_work", "credential_function_work", "work.open", "work_stream", nil, map[string]any{"task_revision_id": task.Aggregate.ID, "context": map[string]any{}}))
@@ -184,12 +180,10 @@ func TestCredentialPinSnapshotsAgentAcrossStores(t *testing.T) {
 				if _, err := db.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := db.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-					t.Fatal(err)
-				}
+
 			}
 			defer db.Close()
-			executor := NewStoreExecutor(db)
+			executor := testStoreExecutor(db)
 			task := execute(t, executor, "dev", command("credential_task", "credential_task", "spec.publish", "spec_revision", nil, map[string]any{"family_id": "credential-task", "revision": 1, "kind": "task", "spec": map[string]any{"name": "Credential task", "goal": "Use pinned credential", "input_schema": map[string]any{"type": "object"}, "output_schema": map[string]any{"type": "object"}, "completion": map[string]any{"kind": "submission_valid"}}}))
 			agent := execute(t, executor, "dev", command("credential_agent", "credential_agent", "spec.publish", "spec_revision", nil, map[string]any{"family_id": "credential-agent", "revision": 1, "kind": "participant", "spec": map[string]any{"name": "Credential agent", "instructions": "Use the pinned connection", "execution_policy": map[string]any{"handler_key": "agent.run", "handler_version": "1", "connection_id": "conn_1", "credential_revision": 7}}}))
 			work := execute(t, executor, "dev", command("credential_work", "credential_work", "work.open", "work_stream", nil, map[string]any{"task_revision_id": task.Aggregate.ID, "context": map[string]any{}}))

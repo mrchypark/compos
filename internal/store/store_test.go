@@ -24,6 +24,12 @@ func TestOpenInitializesStrictSchemaAndEveryConnectionUsesForeignKeys(t *testing
 	if identity != SchemaIdentity {
 		t.Fatalf("identity = %q", identity)
 	}
+	for _, table := range []string{"workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities", "principal_person_bindings", "person_binding_claims", "knowledge_documents", "knowledge_relations", "ontology_groundings"} {
+		var count int
+		if err := store.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("retired table %s count=%d err=%v", table, count, err)
+		}
+	}
 	var templates int
 	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name='object_type_templates'`).Scan(&templates); err != nil || templates != 0 {
 		t.Fatalf("retired template table count=%d err=%v", templates, err)
@@ -136,51 +142,5 @@ func TestOnlineBackupCanBeOpened(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("backup workspace count=%d", count)
-	}
-}
-
-func TestSQLiteSupportsKnowledgeSearchAndBoundedGraphTraversal(t *testing.T) {
-	ctx := context.Background()
-	s, err := Open(ctx, Options{Path: filepath.Join(t.TempDir(), "capabilities.sqlite")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	if _, err := s.DB().Exec(`CREATE VIRTUAL TABLE capability_fts USING fts5(title, body); INSERT INTO capability_fts VALUES('Customer','enterprise account')`); err != nil {
-		t.Fatalf("FTS5 unavailable: %v", err)
-	}
-	var title string
-	if err := s.DB().QueryRow(`SELECT title FROM capability_fts WHERE capability_fts MATCH 'enterprise'`).Scan(&title); err != nil || title != "Customer" {
-		t.Fatalf("FTS5 query title=%q err=%v", title, err)
-	}
-
-	if _, err := s.DB().Exec(`CREATE TABLE capability_edges(source TEXT, target TEXT); INSERT INTO capability_edges VALUES('a','b'),('b','a'),('b','c')`); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := s.DB().Query(`
-		WITH RECURSIVE walk(node, depth, visited) AS (
-			VALUES('a', 0, '|a|')
-			UNION ALL
-			SELECT e.target, walk.depth + 1, walk.visited || e.target || '|'
-			FROM walk JOIN capability_edges e ON e.source = walk.node
-			WHERE walk.depth < 8 AND instr(walk.visited, '|' || e.target || '|') = 0
-		)
-		SELECT node, depth FROM walk ORDER BY depth, node`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var got []string
-	for rows.Next() {
-		var node string
-		var depth int
-		if err := rows.Scan(&node, &depth); err != nil {
-			t.Fatal(err)
-		}
-		got = append(got, node)
-	}
-	if want := []string{"a", "b", "c"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
-		t.Fatalf("bounded traversal=%v want %v", got, want)
 	}
 }

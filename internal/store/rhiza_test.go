@@ -3,27 +3,11 @@ package store
 import (
 	"context"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/mrchypark/rhiza"
 )
-
-func TestComposGraphIndexesAreConfiguredOnce(t *testing.T) {
-	custom := rhiza.GraphNodePropertyIndex{Label: "Custom", Property: "key"}
-	concept := rhiza.GraphNodePropertyIndex{Label: "ComposConcept", Property: "projection_key"}
-	config := withComposGraphIndexes(rhiza.Config{LocalGraphNodePropertyIndexes: []rhiza.GraphNodePropertyIndex{custom, concept}})
-	want := []rhiza.GraphNodePropertyIndex{
-		custom,
-		concept,
-		{Label: "ComposEntityDefinition", Property: "projection_key"},
-		{Label: "ComposProjectionState", Property: "projection_key"},
-	}
-	if !reflect.DeepEqual(config.LocalGraphNodePropertyIndexes, want) {
-		t.Fatalf("indexes=%#v", config.LocalGraphNodePropertyIndexes)
-	}
-}
 
 func TestEmbeddedRhizaRejectsInteractiveTransactions(t *testing.T) {
 	ctx := context.Background()
@@ -70,15 +54,11 @@ func TestEmbeddedRhizaEnforcesForeignKeys(t *testing.T) {
 	}
 	defer s.Close()
 	one := int64(1)
-	err = s.ApplyStatements(ctx, "orphan-membership", []rhiza.SQLStatement{{
-		SQL: `INSERT INTO workspace_memberships(workspace_id,principal_id,role,created_at) VALUES('missing','dev','owner','2026-01-01T00:00:00Z')`, ExpectedRowsAffected: &one,
+	err = s.ApplyStatements(ctx, "orphan-object-type", []rhiza.SQLStatement{{
+		SQL: `INSERT INTO object_types(id,workspace_id,key,singular,plural,field_schema_json,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES('orphan','missing','orphan','Orphan','Orphans','{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','dev','dev')`, ExpectedRowsAffected: &one,
 	}})
 	if !errors.Is(err, ErrMutationExecutionFailed) {
-		t.Fatalf("orphan membership error=%v", err)
-	}
-	var count int
-	if err := s.ReadRow(ctx, ReadLinearizable, `SELECT COUNT(*) FROM workspace_memberships`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("membership count=%d err=%v", count, err)
+		t.Fatalf("orphan object type error=%v", err)
 	}
 }
 

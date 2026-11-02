@@ -14,7 +14,7 @@ func TestCommitRhizaRejectsOversizePlanWithoutSecondaryEffects(t *testing.T) {
 	ctx := context.Background()
 	db := openRhizaKernelStore(t, ctx, "rhiza-batch-limit")
 	defer db.Close()
-	executor := NewStoreExecutor(db)
+	executor := testStoreExecutor(db)
 
 	statements := make([]rhiza.SQLStatement, 60)
 	for i := range statements {

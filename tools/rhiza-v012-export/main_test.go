@@ -26,7 +26,7 @@ func TestExportFilesystemReplicaStableAndExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Tables != 1 || result.Rows != 2 || result.ExcludedTables != 2 || result.SHA256 == "" {
+	if result.Tables != 1 || result.Rows != 2 || result.ExcludedTables != 11 || result.SHA256 == "" {
 		t.Fatalf("unexpected summary: %#v", result)
 	}
 	info, err := os.Stat(first)
@@ -57,8 +57,20 @@ func TestExportFilesystemReplicaStableAndExact(t *testing.T) {
 	if got, ok := document.Tables[0].Rows[0][1].(json.Number); !ok || got.String() != "-9007199254740993" {
 		t.Fatalf("exact integer lost: %#v", document.Tables[0].Rows[0][1])
 	}
-	if len(document.Excluded) != 2 || document.Excluded[0] != (excludedTable{Name: "object_type_templates", Rows: 2}) || document.Excluded[1] != (excludedTable{Name: "schema_metadata", Rows: 1}) {
+	if len(document.Excluded) != 11 {
 		t.Fatalf("unexpected excluded tables: %#v", document.Excluded)
+	}
+	for _, excluded := range document.Excluded {
+		want := uint64(1)
+		if excluded.Name == "object_type_templates" {
+			want = 2
+		}
+		if excluded.Rows != want {
+			t.Fatalf("excluded count=%+v", excluded)
+		}
+	}
+	if body, err := os.ReadFile(first); err != nil || bytes.Contains(body, []byte("retired-private-identity")) {
+		t.Fatalf("export included retired identity values or could not be read: %v", err)
 	}
 
 	conf.output = second
@@ -143,6 +155,14 @@ func seedSource(t *testing.T, storeDir string, blob bool) {
 	exec("retired", "CREATE TABLE object_type_templates (id INTEGER PRIMARY KEY, body TEXT)")
 	exec("retired-one", "INSERT INTO object_type_templates VALUES (?, ?)", int64(1), "first")
 	exec("retired-two", "INSERT INTO object_type_templates VALUES (?, ?)", int64(2), "second")
+	for _, table := range []string{"knowledge_documents", "knowledge_relations", "ontology_groundings"} {
+		exec("retired-"+table, "CREATE TABLE "+table+" (id INTEGER PRIMARY KEY, body TEXT)")
+		exec("retired-row-"+table, "INSERT INTO "+table+" VALUES (?, ?)", int64(1), "retired Knowledge")
+	}
+	for _, table := range []string{"workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities", "principal_person_bindings", "person_binding_claims"} {
+		exec("retired-"+table, "CREATE TABLE "+table+" (id INTEGER PRIMARY KEY, body TEXT)")
+		exec("retired-row-"+table, "INSERT INTO "+table+" VALUES (?, ?)", int64(1), "retired-private-identity")
+	}
 	exec("records", "CREATE TABLE records (id INTEGER PRIMARY KEY, exact INTEGER, name TEXT, enabled INTEGER, score REAL, note TEXT)")
 	exec("record-two", "INSERT INTO records VALUES (?, ?, ?, ?, ?, ?)", int64(2), int64(9007199254740993), "second", int64(1), 1.25, nil)
 	exec("record-one", "INSERT INTO records VALUES (?, ?, ?, ?, ?, ?)", int64(1), int64(-9007199254740993), "first", int64(0), 2.5, "note")

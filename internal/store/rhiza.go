@@ -16,7 +16,6 @@ import (
 
 // OpenRhiza starts an embedded Rhiza SQL node. No public database listener is opened.
 func OpenRhiza(ctx context.Context, config rhiza.Config) (*Store, error) {
-	config = withComposGraphIndexes(config)
 	cluster, err := rhiza.Open(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("open embedded rhiza: %w", err)
@@ -43,24 +42,6 @@ func OpenRhiza(ctx context.Context, config rhiza.Config) (*Store, error) {
 		}
 	}
 	return s, nil
-}
-
-func withComposGraphIndexes(config rhiza.Config) rhiza.Config {
-	indexes := append([]rhiza.GraphNodePropertyIndex(nil), config.LocalGraphNodePropertyIndexes...)
-	seen := make(map[rhiza.GraphNodePropertyIndex]struct{}, len(indexes)+3)
-	for _, index := range indexes {
-		seen[index] = struct{}{}
-	}
-	for _, label := range []string{"ComposConcept", "ComposEntityDefinition", "ComposProjectionState"} {
-		index := rhiza.GraphNodePropertyIndex{Label: label, Property: "projection_key"}
-		if _, ok := seen[index]; ok {
-			continue
-		}
-		indexes = append(indexes, index)
-		seen[index] = struct{}{}
-	}
-	config.LocalGraphNodePropertyIndexes = indexes
-	return config
 }
 
 func (s *Store) initializeRhiza(ctx context.Context) error {
@@ -115,36 +96,6 @@ func rhizaSchemaMigrations() ([]rhiza.Migration, error) {
 		},
 	})
 	return migrations, nil
-}
-
-func (s *Store) GraphAvailable() bool { return s.rhiza != nil }
-
-func (s *Store) GraphExecute(ctx context.Context, requestID, cypher string, args map[string]any) error {
-	if s.rhiza == nil {
-		return errors.New("embedded Rhiza graph is unavailable")
-	}
-	response, err := s.rhiza.GraphExecute(ctx, rhiza.GraphCommand{RequestID: compactSQLRequestID(requestID), Cypher: cypher, Args: args})
-	if err != nil {
-		return err
-	}
-	if response.Status != "committed" {
-		return fmt.Errorf("commit rhiza graph mutation rejected: status=%s code=%s", response.Status, response.ErrorCode)
-	}
-	return nil
-}
-
-func (s *Store) GraphQuery(ctx context.Context, cypher string, args map[string]any) (rhiza.GraphResult, error) {
-	if s.rhiza == nil {
-		return rhiza.GraphResult{}, errors.New("embedded Rhiza graph is unavailable")
-	}
-	return s.rhiza.GraphQuery(ctx, rhiza.GraphQueryRequest{Cypher: cypher, Args: args, Consistency: rhiza.ConsistencyLocal})
-}
-
-func (s *Store) GraphReachable(ctx context.Context, request rhiza.GraphReachableRequest) (rhiza.GraphReachableResult, error) {
-	if s.rhiza == nil {
-		return rhiza.GraphReachableResult{}, errors.New("embedded Rhiza graph is unavailable")
-	}
-	return s.rhiza.GraphReachable(ctx, request)
 }
 
 func compactSQLRequestID(requestID string) string {

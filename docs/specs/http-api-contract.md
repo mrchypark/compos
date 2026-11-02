@@ -490,9 +490,7 @@ durability; they append to the embedded local request ledger, then submit to the
 Compos server. Embedded Rhiza owns HA replication and recovery; the server does
 not expose command-log repair or confirmed-replay endpoints.
 
-The Go SQLite support mode accepts an 8 MiB JSON command envelope. A decoded
-OKF `source_markdown` remains limited to 1 MiB; the larger envelope allows the
-full valid source size even when JSON escaping expands it.
+The Go SQLite support mode accepts an 8 MiB JSON command envelope.
 
 Request:
 
@@ -601,9 +599,12 @@ pins the latest revision.
 
 ### Storage baseline
 
-This release supports only fresh databases carrying the canonical
-`compos-go-sqlite-world-spec-journal-reactive-agent-v3` identity. Existing databases without that identity must be
-recreated; there is no rolling migration or compatibility mode.
+Fresh databases carry the canonical
+`compos-go-sqlite-world-spec-journal-reactive-agent-v4` identity. Existing v3
+databases migrate atomically on open by dropping only `ontology_groundings`,
+`knowledge_relations` and `knowledge_documents`, including their contents, then
+publishing v4. Shared specs and history remain. Other identities are rejected;
+this is not mixed-version writer compatibility.
 
 ## Command Recovery Boundary
 
@@ -776,22 +777,20 @@ Response:
     "created_at": "2026-06-08T00:00:00Z",
     "signature": null,
     "signing_key_id": null,
-    "schema_version": 2,
+    "schema_version": 3,
     "data_hash": "sha256:...",
-    "objects": [],
-    "knowledge": []
+    "objects": []
   }
 }
 ```
 
 The snapshot is a full projection baseline for the supported projection schema.
-Schema version 2 includes object and Knowledge projections. `data_hash` is
+Schema version 3 includes only object projections. `data_hash` is
 the canonical hash of the snapshot data object:
 
 ```json
 {
-  "objects": [],
-  "knowledge": []
+  "objects": []
 }
 ```
 
@@ -799,51 +798,12 @@ The current snapshot is unsigned; `signature` and `signing_key_id` are `null`.
 
 The current CLI normal reads use the canonical object endpoints.
 
-## Knowledge And Ontology Reads
+## Domain Events and external Knowledge
 
-```text
-GET /api/v1/workspaces/{workspace_id}/knowledge?bundle_id=&type=&limit=&offset=
-GET /api/v1/workspaces/{workspace_id}/knowledge/{bundle_id}/{concept_id...}?format=source
-GET /api/v1/workspaces/{workspace_id}/ontology/traverse?bundle_id=&concept_id=&direction=out|in|both&depth=1..8
-GET /api/v1/workspaces/{workspace_id}/ontology/reachable-node-ids?bundle_id=&concept_id=&depth=1..8&max_results=&max_scanned_edges=&min_projection_sequence=
-GET /api/v1/workspaces/{workspace_id}/ontology/groundings?bundle_id=&concept_id=&entity_definition_id=
-GET /api/v1/workspaces/{workspace_id}/events
-GET /api/v1/workspaces/{workspace_id}/knowledge/proposals
-```
-
-Knowledge, grounding and Ontology traversal are canonical SQL reads (Rhiza in
-deployed mode; SQLite only locally and in tests).
-Full-text search is the external Meilisearch projection exposed through the
-separate `POST /search` endpoint.
-Knowledge detail exposes the source-byte-addressed `revision_id`. Supplying that ID
-with `format=source&revision_id=sha256:...` reads the exact accepted historical
-OKF source from the append-only command ledger, including after later replacement
-or removal. `knowledge.remove` remains the corresponding ledger tombstone.
-When embedded Rhiza Graph is available, the server may additionally
-serve outgoing unique reachable Concept IDs. This endpoint returns no path,
-depth, predicate or multiplicity information and never falls back to SQLite.
-It returns `503 graph_unavailable` when disabled, `503 stale_projection` when
-the projection has not reached the canonical or requested minimum sequence, and
-`422 resource_limit_exceeded` without partial results when either budget is
-exceeded. Successful responses include `projection_sequence` and
-`projection_generation` in `consistency`.
-Each reachability request compares the persisted workspace cursor to a fresh
-linearizable Knowledge event head. The cursor, head and native traversal must
-observe the same Rhiza applied slot; concurrent advancement returns retryable
-`503 stale_projection`. Missing workspace state, incompatible projection schema,
-a canonical start absent from the graph, or an active local reconciler also
-return `503 stale_projection`, not a successful empty result. A valid isolated
-Concept still returns an empty ID list. This is a single-projector read gate,
-not approval for concurrent multi-process projection rebuilds.
-Traversal is server-bounded to depth 8, 10,000 result
-rows, 100,000 edge expansions and a two-second deadline; exceeding a budget
-returns `422 resource_limit_exceeded`.
-Knowledge result pagination is ordered by `(bundle_id, concept_id)`.
-
-Domain Event instances and Knowledge proposal/review state are Journal-derived
-reads. Mutations use `event.emit`, `knowledge.propose` and `knowledge.review`
-through `POST /api/v1/kernel/commands`; accepted proposals publish an immutable
-`ontology` spec revision atomically.
+`GET /api/v1/workspaces/{workspace_id}/events` reads Journal-derived Domain Events.
+Mutations use `event.emit` through the Kernel command endpoint. Knowledge is
+externally owned; Knowledge, Concept traversal, reachability, grounding and
+proposal endpoints have been removed. Generic Ontology specs remain supported.
 
 If the requested `after` sequence is too old, the server returns:
 
@@ -873,30 +833,9 @@ Response:
     "kind": "sqlite",
     "cluster_id": "sqlite-local",
     "ready": true
-  },
-  "knowledge_projection": {
-    "enabled": true,
-    "status": "ready|degraded|rebuilding",
-    "healthy": true,
-    "error": null,
-    "sqlite_heads": {"wks_1": 42},
-    "graph_cursors": {"wks_1": 42},
-    "lag_events": {"wks_1": 0},
-    "last_success_at": "2026-08-29T00:00:00Z",
-    "rebuild_count": 0,
-    "projection_version": 3,
-    "production_approved": false,
-    "request_reads": true,
-    "search_backend": "meilisearch|unavailable",
-    "traversal_backend": "sqlite",
-    "reachable_node_ids_backend": "rhiza_graph"
   }
 }
 ```
-
-In SQLite-only mode, `knowledge_projection.status` is `disabled`.
-`request_reads` can be true only for the explicit reachable-node capability;
-`production_approved` remains false until the published operational gates pass.
 
 Rhiza readiness failures return `503 storage_unavailable`; the server does not
 synthesize a quorum claim from local process or Kubernetes state.
@@ -1202,6 +1141,12 @@ All fields are optional; an empty `q` performs a filtered listing. `filter` acce
 `sort` is an array of sortable attributes with optional direction suffix.
 The proxy sends the mandatory workspace predicate and caller filter as separate
 top-level AND terms, so caller syntax cannot widen the workspace boundary.
+The server retrieves `object_id` internally even for restricted attribute requests,
+discards hits without a non-empty string object ID, and hides that internal field
+unless requested. Existing indexes need no new filterable attributes. Engine
+totals and facets are omitted because they can include legacy documents;
+`returnedHits` counts only returned objects on this page. Offsets retain engine
+semantics, so pages may be short or empty before a workspace snapshot rebuild.
 
 Success response:
 
@@ -1220,7 +1165,7 @@ Success response:
         "updated_at": "2026-06-08T00:00:00Z"
       }
     ],
-    "estimatedTotalHits": 1,
+    "returnedHits": 1,
     "limit": 20,
     "offset": 0,
     "processingTimeMs": 1
@@ -1233,7 +1178,7 @@ return the canonical Compos object ID in `id`, even when the engine uses a
 workspace-qualified hash as its document ID. `object_id` also contains the
 canonical ID when requested or when all attributes are returned. Selecting
 only `id` does not expose this internal helper attribute. Other response fields
-and Knowledge IDs retain the Meilisearch response shape.
+retain the Meilisearch response shape.
 
 ## Forbidden HTTP Shapes
 

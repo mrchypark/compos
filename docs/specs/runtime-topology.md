@@ -9,8 +9,8 @@ flowchart LR
     Server --> Kernel["Go Kernel"]
     Kernel -->|"one quorum transaction"| Rhiza["embedded Rhiza SQL + Graph + KV"]
     Rhiza --> Events["projection_events"]
-    Events --> Reconciler["single background reconciler"]
-    Reconciler --> Graph["Rhiza embedded graph projection"]
+    Events --> Syncer["search-syncer"]
+    Syncer --> Search["Meilisearch object projection"]
     Operator["Rust Kubernetes operator"] -. "deployment control" .-> Server
 ```
 
@@ -38,34 +38,21 @@ not rollback. This also applies to a v0.18.0 cluster with SQL policy 4. See the
    compare-and-set preconditions.
 4. One embedded Rhiza quorum transaction commits business state, the command
    ledger, activity, outbox event and projection event.
-5. The HTTP mutation response depends only on that canonical commit. Graph
-   projection work is never performed in a mutation request path.
+5. The HTTP mutation response depends only on that canonical commit.
 
-## Knowledge projection path
+## External Knowledge ownership and reads
 
-`projection_events` is the durable outbox. One in-process reconciler consumes
-Knowledge events in workspace sequence order and reads the current canonical
-Concept snapshot from SQL. A valid cursor catches up incrementally; a missing,
-incompatible or corrupt projection is rebuilt from canonical SQL.
-
-The graph is a rebuildable derived view inside the same Rhiza v0.19.0 runtime and
-is included in Rhiza checkpoints with SQL and KV. In Rhiza mode it starts
-automatically and serves only bounded outgoing unique reachability. Cursor and
-digest are returned as its watermark; stale projections fail closed.
-Reachability compares the persisted cursor with a fresh linearizable Knowledge
-head and uses `RequireAppliedSlot` to bind the graph query to that read version.
-The local reconciler lock excludes partial local updates. Concurrent projector
-publication and crash-rebuild atomicity are separate HA gates, not implied by
-this process-local lock or by the shared Rhiza storage engine.
-
-## Read path
-
-The CLI reads the Go server. Canonical object, command and Knowledge detail
-reads come from canonical SQL (Rhiza in deployed mode, SQLite only locally and
-in tests). Full-text search uses the rebuildable external Meilisearch projection
-and exact bounded ontology path traversal uses canonical SQL. The separate
-`reachable-node-ids` endpoint explicitly selects the Rhiza graph and fails
-unavailable when that projection is absent or stale.
+Knowledge content and its lifecycle are owned externally. Compos has no Knowledge
+commands, HTTP reads, graph projection, or reconciliation worker. Immutable
+Ontology specs and Task ontology context remain part of the generic spec model.
+Canonical object and command reads use SQL. Object full-text search uses the
+external Meilisearch projection. Every syncer restart clears its workspace's
+projection and rebuilds from the object-only snapshot, removing legacy documents.
+The API separately removes hits without a valid `object_id`, without requiring
+index settings changes. It reports filtered page counts, omitting engine totals
+and facets. On opening v3 databases, the
+store atomically drops the three dedicated Knowledge tables and publishes v4;
+shared specs, Ontology revisions and history remain.
 
 ## Kubernetes operator boundary
 
@@ -87,8 +74,4 @@ implementation.
 
 - CLI direct database mutation.
 - Automation or adapter direct database mutation.
-- Graph projection as command or event authority.
-- Synchronous graph projection in an HTTP mutation request.
-- Rhiza Graph serving search, grounding, path-row traversal or any request other
-  than the explicit bounded unique-reachability capability.
 - More than one active Go server process for a SQLite database.

@@ -1,5 +1,7 @@
 # Atomic Work submission release — 2026-09-05
 
+Historical verification record: Knowledge support described here has since been removed; Knowledge is externally owned.
+
 Source: `82b42b1` on `feature/rhiza-v0.9.1-port`, pushed to origin.
 Built and pushed with the existing Kubernetes `tg900-buildkit` builder,
 `linux/amd64`, Dockerfile targets `server` and `search-syncer`. No Cloud Build.

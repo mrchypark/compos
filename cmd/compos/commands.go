@@ -19,13 +19,13 @@ type httpDoer interface {
 }
 
 type runtimeDeps struct {
-	stdout      io.Writer
-	stderr      io.Writer
-	client      httpDoer
-	now         func() time.Time
-	newID       func(prefix string) string
-	sleep       func(context.Context, time.Duration) error
-	sessionPath string
+	stdout           io.Writer
+	stderr           io.Writer
+	client           httpDoer
+	now              func() time.Time
+	newID            func(prefix string) string
+	sleep            func(context.Context, time.Duration) error
+	identityProvider func() (cliSession, error)
 }
 
 type closeableCommandJournal interface {
@@ -92,21 +92,9 @@ func commandRouteFor(args []string) commandRoute {
 				return err
 			},
 		}
-	case "setup":
-		return commandRoute{run: func(_ context.Context, _ ledger.CommandAttemptJournal, deps runtimeDeps) error {
-			return runSetup(deps)
-		}}
-	case "login":
-		return commandRoute{run: func(_ context.Context, _ ledger.CommandAttemptJournal, deps runtimeDeps) error {
-			return runLogin(tail, deps)
-		}}
-	case "logout":
-		return commandRoute{run: func(_ context.Context, _ ledger.CommandAttemptJournal, deps runtimeDeps) error {
-			return runLogout(deps)
-		}}
-	case "whoami":
-		return commandRoute{run: func(_ context.Context, _ ledger.CommandAttemptJournal, deps runtimeDeps) error {
-			return runWhoami(deps)
+	case "setup", "login", "logout", "whoami":
+		return commandRoute{run: func(_ context.Context, _ ledger.CommandAttemptJournal, _ runtimeDeps) error {
+			return fmt.Errorf("local account commands have been removed; use the external identity integration")
 		}}
 	case "workspace":
 		return commandRoute{run: func(ctx context.Context, _ ledger.CommandAttemptJournal, deps runtimeDeps) error {
@@ -256,10 +244,6 @@ usage: compos <command>
 
 commands:
   version
-  setup
-  login --provider rauthy|pocketbase --access-token TOKEN [--server URL] [--workspace W]
-  logout
-  whoami
   workspace create [--server URL] --name NAME [--key KEY] [--idempotency-key KEY]
   web [--listen 127.0.0.1:8787] [--no-open] [--server URL] [--workspace W]
 	      --enable-writes records browser form POST attempts locally (default is read-only)

@@ -51,31 +51,15 @@ type Object struct {
 }
 
 type ProjectionSnapshot struct {
-	SnapshotID         string              `json:"snapshot_id"`
-	WorkspaceID        string              `json:"workspace_id"`
-	ProjectionSequence int64               `json:"projection_sequence"`
-	CreatedAt          string              `json:"created_at"`
-	Signature          *string             `json:"signature"`
-	SigningKeyID       *string             `json:"signing_key_id"`
-	SchemaVersion      int                 `json:"schema_version"`
-	DataHash           string              `json:"data_hash"`
-	Objects            []Object            `json:"objects"`
-	Knowledge          []KnowledgeDocument `json:"knowledge"`
-}
-
-type KnowledgeDocument struct {
-	ID           string  `json:"id"`
-	WorkspaceID  string  `json:"workspace_id"`
-	BundleID     string  `json:"bundle_id"`
-	ConceptID    string  `json:"concept_id"`
-	ConceptType  string  `json:"concept_type"`
-	Title        *string `json:"title"`
-	Description  *string `json:"description"`
-	Resource     *string `json:"resource"`
-	BodyMarkdown string  `json:"body_markdown"`
-	ContentHash  string  `json:"content_hash"`
-	CreatedAt    string  `json:"created_at"`
-	UpdatedAt    string  `json:"updated_at"`
+	SnapshotID         string   `json:"snapshot_id"`
+	WorkspaceID        string   `json:"workspace_id"`
+	ProjectionSequence int64    `json:"projection_sequence"`
+	CreatedAt          string   `json:"created_at"`
+	Signature          *string  `json:"signature"`
+	SigningKeyID       *string  `json:"signing_key_id"`
+	SchemaVersion      int      `json:"schema_version"`
+	DataHash           string   `json:"data_hash"`
+	Objects            []Object `json:"objects"`
 }
 
 type ProjectionEvent struct {
@@ -262,8 +246,8 @@ func ensureIndex(ctx context.Context, msClient meilisearch.ServiceManager, cfg C
 
 func updateIndexSettings(msClient meilisearch.ServiceManager, cfg Config) error {
 	task, err := msClient.Index(cfg.IndexUID).UpdateSettings(&meilisearch.Settings{
-		SearchableAttributes: []string{"name", "name_search", "name_mixed", "title", "description", "body_markdown", "concept_id", "type"},
-		FilterableAttributes: []string{"workspace_id", "type", "state", "concept_type", "bundle_id", "updated_at"},
+		SearchableAttributes: []string{"name", "name_search", "name_mixed", "title", "type"},
+		FilterableAttributes: []string{"workspace_id", "type", "state", "updated_at"},
 		SortableAttributes:   []string{"updated_at", "title"},
 	})
 	if err != nil {
@@ -315,9 +299,6 @@ func syncFromSnapshot(ctx context.Context, httpClient *http.Client, msClient mei
 
 	if err := indexDocuments(ctx, msClient, cfg, snapshot.Objects); err != nil {
 		return fmt.Errorf("index snapshot documents: %w", err)
-	}
-	if err := indexKnowledgeDocuments(ctx, msClient, cfg, snapshot.Knowledge); err != nil {
-		return fmt.Errorf("index Knowledge documents: %w", err)
 	}
 
 	state.LastSequence = snapshot.ProjectionSequence
@@ -393,35 +374,9 @@ func processEvent(ctx context.Context, msClient meilisearch.ServiceManager, cfg 
 	switch event.AggregateType {
 	case "object_instance":
 		return processObjectEvent(ctx, msClient, cfg, event)
-	case "knowledge_document":
-		return processKnowledgeEvent(ctx, msClient, cfg, event)
 	default:
 		return nil
 	}
-}
-
-func processKnowledgeEvent(ctx context.Context, msClient meilisearch.ServiceManager, cfg Config, event ProjectionEvent) error {
-	payload, ok := event.Payload.(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	operation, _ := payload["operation"].(string)
-	if operation == "removed" {
-		return deleteDocument(ctx, msClient, cfg, knowledgeSearchID(event.WorkspaceID, event.AggregateID))
-	}
-	if operation != "accepted" {
-		return nil
-	}
-	document := KnowledgeDocument{ID: event.AggregateID, WorkspaceID: event.WorkspaceID, UpdatedAt: event.CreatedAt, CreatedAt: event.CreatedAt}
-	document.BundleID, _ = payload["bundle_id"].(string)
-	document.ConceptID, _ = payload["concept_id"].(string)
-	document.ConceptType, _ = payload["concept_type"].(string)
-	document.BodyMarkdown, _ = payload["body_markdown"].(string)
-	document.ContentHash, _ = payload["content_hash"].(string)
-	document.Title = optionalString(payload["title"])
-	document.Description = optionalString(payload["description"])
-	document.Resource = optionalString(payload["resource"])
-	return indexKnowledgeDocuments(ctx, msClient, cfg, []KnowledgeDocument{document})
 }
 
 func processObjectEvent(ctx context.Context, msClient meilisearch.ServiceManager, cfg Config, event ProjectionEvent) error {
@@ -524,56 +479,9 @@ func indexDocuments(ctx context.Context, msClient meilisearch.ServiceManager, cf
 	return nil
 }
 
-func indexKnowledgeDocuments(ctx context.Context, msClient meilisearch.ServiceManager, cfg Config, knowledge []KnowledgeDocument) error {
-	if len(knowledge) == 0 {
-		return nil
-	}
-	docs := make([]map[string]interface{}, 0, len(knowledge))
-	for _, item := range knowledge {
-		doc := map[string]interface{}{
-			"id": knowledgeSearchID(item.WorkspaceID, item.ID), "knowledge_id": item.ID, "workspace_id": item.WorkspaceID, "type": "knowledge", "bundle_id": item.BundleID,
-			"concept_id": item.ConceptID, "concept_type": item.ConceptType, "body_markdown": item.BodyMarkdown,
-			"content_hash": item.ContentHash, "created_at": item.CreatedAt, "updated_at": item.UpdatedAt,
-		}
-		if item.Title != nil {
-			doc["title"] = *item.Title
-			doc["name_search"] = korean.SearchFields(*item.Title)
-			doc["name_mixed"] = korean.MixedSearchFields(*item.Title)
-		}
-		if item.Description != nil {
-			doc["description"] = *item.Description
-		}
-		if item.Resource != nil {
-			doc["resource"] = *item.Resource
-		}
-		docs = append(docs, doc)
-	}
-	task, err := msClient.Index(cfg.IndexUID).AddDocuments(docs, nil)
-	if err != nil {
-		return fmt.Errorf("add Knowledge documents: %w", err)
-	}
-	if err := waitTask(msClient.WaitForTask, task.TaskUID); err != nil {
-		return fmt.Errorf("wait for Knowledge indexing: %w", err)
-	}
-	return nil
-}
-
-func knowledgeSearchID(workspaceID, canonicalID string) string {
-	sum := sha256.Sum256([]byte(workspaceID + "\x00" + canonicalID))
-	return "knw_" + hex.EncodeToString(sum[:])
-}
-
 func objectSearchID(workspaceID, canonicalID string) string {
 	sum := sha256.Sum256([]byte(workspaceID + "\x00" + canonicalID))
 	return "obj_" + hex.EncodeToString(sum[:])
-}
-
-func optionalString(value any) *string {
-	text, ok := value.(string)
-	if !ok || text == "" {
-		return nil
-	}
-	return &text
 }
 
 func patchDocument(ctx context.Context, msClient meilisearch.ServiceManager, cfg Config, docID string, update map[string]interface{}) error {

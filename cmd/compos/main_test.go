@@ -47,7 +47,6 @@ func testSessionPath(t *testing.T, principal string) string {
 		WorkspaceID: "wks_1",
 		PrincipalID: principal,
 		Credential:  principal,
-		CreatedAt:   "1970-01-01T00:00:00Z",
 	}
 	body, err := json.Marshal(session)
 	if err != nil {
@@ -94,22 +93,6 @@ func TestDefaultJournal_usesLocalBboltJournalByDefault(t *testing.T) {
 	}
 }
 
-func TestRunSetup_reportsLocalPaths(t *testing.T) {
-	journalPath := filepath.Join(t.TempDir(), "ledger.db")
-	sessionPath := filepath.Join(t.TempDir(), "auth.json")
-	t.Setenv("COMPOS_LEDGER_PATH", journalPath)
-	t.Setenv("COMPOS_SESSION_PATH", sessionPath)
-	var stdout bytes.Buffer
-
-	if err := runWithDeps([]string{"setup"}, ledger.NewMemoryJournal(), runtimeDeps{stdout: &stdout}); err != nil {
-		t.Fatalf("setup should report defaults: %v", err)
-	}
-
-	if !strings.Contains(stdout.String(), sessionPath) || !strings.Contains(stdout.String(), journalPath) {
-		t.Fatalf("setup should print session and ledger paths, got %q", stdout.String())
-	}
-}
-
 func TestRun_rejects_legacy_top_level_product_nouns(t *testing.T) {
 	for _, command := range []string{
 		"project",
@@ -130,7 +113,7 @@ func TestRun_rejects_legacy_top_level_product_nouns(t *testing.T) {
 		"statuses",
 	} {
 		t.Run(command, func(t *testing.T) {
-			if err := runWithDeps([]string{command}, ledger.NewMemoryJournal(), runtimeDeps{}); err == nil {
+			if err := runWithTestDeps([]string{command}, ledger.NewMemoryJournal(), runtimeDeps{}); err == nil {
 				t.Fatalf("expected legacy command %q to be rejected", command)
 			}
 		})
@@ -138,7 +121,7 @@ func TestRun_rejects_legacy_top_level_product_nouns(t *testing.T) {
 }
 
 func TestRun_rejectsForwarderRun(t *testing.T) {
-	err := runWithDeps([]string{"forwarder", "run"}, ledger.NewMemoryJournal(), runtimeDeps{})
+	err := runWithTestDeps([]string{"forwarder", "run"}, ledger.NewMemoryJournal(), runtimeDeps{})
 
 	if err == nil || !strings.Contains(err.Error(), `unknown command "forwarder"`) {
 		t.Fatalf("expected removed forwarder command to be rejected, got %v", err)
@@ -147,7 +130,7 @@ func TestRun_rejectsForwarderRun(t *testing.T) {
 
 func TestRun_rejectsRemovedTaskCommands(t *testing.T) {
 	for _, command := range []string{"task", "submission"} {
-		err := runWithDeps([]string{command, "create"}, ledger.NewMemoryJournal(), runtimeDeps{})
+		err := runWithTestDeps([]string{command, "create"}, ledger.NewMemoryJournal(), runtimeDeps{})
 		if err == nil || !strings.Contains(err.Error(), `unknown command "`+command+`"`) {
 			t.Fatalf("expected removed %q command to be rejected, got %v", command, err)
 		}
@@ -155,7 +138,7 @@ func TestRun_rejectsRemovedTaskCommands(t *testing.T) {
 }
 
 func TestObjectUsage_includesUpdateAndMoveCommands(t *testing.T) {
-	err := runWithDeps([]string{"object"}, ledger.NewMemoryJournal(), runtimeDeps{})
+	err := runWithTestDeps([]string{"object"}, ledger.NewMemoryJournal(), runtimeDeps{})
 
 	if err == nil || !strings.Contains(err.Error(), "usage: compos object <create|update|move|get>") {
 		t.Fatalf("expected object usage with update and move, got %v", err)
@@ -163,7 +146,7 @@ func TestObjectUsage_includesUpdateAndMoveCommands(t *testing.T) {
 }
 
 func TestWorkspaceUsage_includesCreateCommand(t *testing.T) {
-	err := runWithDeps([]string{"workspace"}, ledger.NewMemoryJournal(), runtimeDeps{})
+	err := runWithTestDeps([]string{"workspace"}, ledger.NewMemoryJournal(), runtimeDeps{})
 
 	if err == nil || !strings.Contains(err.Error(), "usage: compos workspace <create>") {
 		t.Fatalf("expected workspace usage with create, got %v", err)
@@ -173,7 +156,7 @@ func TestWorkspaceUsage_includesCreateCommand(t *testing.T) {
 func TestWorkspaceHelp_includesCreateCommand(t *testing.T) {
 	var out bytes.Buffer
 
-	if err := runWithDeps([]string{"help", "workspace"}, ledger.NewMemoryJournal(), runtimeDeps{stdout: &out}); err != nil {
+	if err := runWithTestDeps([]string{"help", "workspace"}, ledger.NewMemoryJournal(), runtimeDeps{stdout: &out}); err != nil {
 		t.Fatalf("workspace help should succeed: %v", err)
 	}
 	if !strings.Contains(out.String(), "workspace create [--server URL] --name NAME [--key KEY] [--idempotency-key KEY]") {
@@ -187,7 +170,7 @@ func TestVersionCommandUsesBuildInjectedVersion(t *testing.T) {
 	t.Cleanup(func() { version = original })
 
 	var out bytes.Buffer
-	err := runWithDeps([]string{"version"}, ledger.NewMemoryJournal(), runtimeDeps{
+	err := runWithTestDeps([]string{"version"}, ledger.NewMemoryJournal(), runtimeDeps{
 		stdout: &out,
 	})
 
@@ -250,9 +233,7 @@ func TestCommandNeedsLedger_onlyForCommandMutations(t *testing.T) {
 func TestUsage_documents_operational_flags(t *testing.T) {
 	text := usage()
 	for _, want := range []string{
-		"login --provider rauthy|pocketbase --access-token TOKEN [--server URL] [--workspace W]",
 		"web [--listen 127.0.0.1:8787] [--no-open] [--server URL] [--workspace W]",
-		"--access-token TOKEN",
 		"define [--workspace W] --key K --singular S --plural P",
 		"PLURAL_KEY create",
 		"PLURAL_KEY move",
@@ -458,70 +439,6 @@ func TestWebHandler_setsSecurityHeaders(t *testing.T) {
 	}
 }
 
-func TestLogin_withoutWorkspace_usesServerSelectedWorkspace(t *testing.T) {
-	sessionPath := filepath.Join(t.TempDir(), "auth.json")
-	client := &fakeHTTPClient{
-		status: http.StatusOK,
-		body:   `{"data":{"principal_id":"usr_1","workspace_id":"wks_default","workspace_memberships":["wks_default"],"session":{"token":"csn_test","expires_at":"4102444800"}}}`,
-	}
-	deps := runtimeDeps{
-		stdout:      io.Discard,
-		stderr:      io.Discard,
-		client:      client,
-		now:         func() time.Time { return time.Unix(10, 0).UTC() },
-		sessionPath: sessionPath,
-	}
-
-	if err := runWithDeps([]string{
-		"login",
-		"--provider", "rauthy",
-		"--access-token", "rauthy_token",
-	}, ledger.NewMemoryJournal(), deps); err != nil {
-		t.Fatalf("login should succeed: %v", err)
-	}
-	session, err := loadSession(deps)
-	if err != nil {
-		t.Fatalf("session should load: %v", err)
-	}
-	if session.WorkspaceID != "wks_default" {
-		t.Fatalf("expected server-selected workspace, got %#v", session)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(client.bodies[0], &payload); err != nil {
-		t.Fatalf("login payload should be JSON: %v", err)
-	}
-	if _, ok := payload["workspace_id"]; ok {
-		t.Fatalf("workspace_id should be omitted when workspace is not specified: %#v", payload)
-	}
-}
-
-func TestLogin_providerPocketBase_usesProviderEndpointAndClosedPayload(t *testing.T) {
-	sessionPath := filepath.Join(t.TempDir(), "auth.json")
-	client := &fakeHTTPClient{
-		status: http.StatusOK,
-		body:   `{"data":{"principal_id":"ppr_1","workspace_id":"wks_1","session":{"token":"csn_test","expires_at":"4102444800"}}}`,
-	}
-	deps := runtimeDeps{
-		stdout: io.Discard, stderr: io.Discard, client: client,
-		now: func() time.Time { return time.Unix(10, 0).UTC() }, sessionPath: sessionPath,
-	}
-	if err := runWithDeps([]string{
-		"login", "--provider", "pocketbase", "--access-token", "opaque-pb-token",
-	}, ledger.NewMemoryJournal(), deps); err != nil {
-		t.Fatalf("PocketBase login should succeed: %v", err)
-	}
-	if got := client.requests[0].URL.Path; got != "/api/v1/auth/pocketbase" {
-		t.Fatalf("unexpected provider endpoint: %s", got)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(client.bodies[0], &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["token"] != "opaque-pb-token" || payload["access_token"] != nil {
-		t.Fatalf("unexpected PocketBase request payload: %#v", payload)
-	}
-}
-
 func TestCredentiallessSession_omitsAuthorizationHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://server", nil)
 	setBearerCredential(req, "")
@@ -530,148 +447,17 @@ func TestCredentiallessSession_omitsAuthorizationHeader(t *testing.T) {
 	}
 
 	sessionPath := filepath.Join(t.TempDir(), "auth.json")
-	if err := saveSession(runtimeDeps{sessionPath: sessionPath}, cliSession{
+	if err := writeTestIdentity(sessionPath, cliSession{
 		Server: "http://server", WorkspaceID: "wks_default", PrincipalID: "dev",
 	}); err != nil {
 		t.Fatalf("credential-less development session should save: %v", err)
 	}
 }
 
-func TestLoginWhoamiAndLogout_manage_cli_session(t *testing.T) {
-	sessionPath := filepath.Join(t.TempDir(), "auth.json")
-	var stdout strings.Builder
-	client := &fakeHTTPClient{
-		responses: []fakeHTTPResponse{
-			{status: http.StatusOK, body: `{"data":{"principal_id":"usr_1","workspace_id":"wks_1","workspace_memberships":["wks_1"],"session":{"token":"csn_test","expires_at":"4102444800"}}}`},
-			{status: http.StatusOK, body: `{"data":{"status":"logged_out"}}`},
-		},
-	}
-	deps := runtimeDeps{
-		stdout:      &stdout,
-		stderr:      io.Discard,
-		client:      client,
-		now:         func() time.Time { return time.Unix(10, 0).UTC() },
-		sessionPath: sessionPath,
-	}
-
-	if err := runWithDeps([]string{
-		"login",
-		"--server", "http://server/",
-		"--workspace", "wks_1",
-		"--provider", "rauthy",
-		"--access-token", "rauthy_token",
-	}, ledger.NewMemoryJournal(), deps); err != nil {
-		t.Fatalf("login should succeed: %v", err)
-	}
-	session, err := loadSession(deps)
-	if err != nil {
-		t.Fatalf("session should load: %v", err)
-	}
-	if session.Server != "http://server" || session.WorkspaceID != "wks_1" || session.PrincipalID != "usr_1" || session.Credential != "csn_test" || session.ExpiresAt != "4102444800" {
-		t.Fatalf("unexpected session: %#v", session)
-	}
-	if client.requests[0].URL.Path != "/api/v1/auth/rauthy" {
-		t.Fatalf("login should exchange with auth endpoint, got %s", client.requests[0].URL.Path)
-	}
-
-	stdout.Reset()
-	if err := runWithDeps([]string{"whoami"}, ledger.NewMemoryJournal(), deps); err != nil {
-		t.Fatalf("whoami should succeed: %v", err)
-	}
-	if strings.Contains(stdout.String(), "credential") {
-		t.Fatalf("whoami must not print credential: %s", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), `"principal_id":"usr_1"`) {
-		t.Fatalf("unexpected whoami output: %s", stdout.String())
-	}
-
-	stdout.Reset()
-	if err := runWithDeps([]string{"logout"}, ledger.NewMemoryJournal(), deps); err != nil {
-		t.Fatalf("logout should succeed: %v", err)
-	}
-	if _, err := os.Stat(sessionPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("logout should remove session, stat err=%v", err)
-	}
-}
-
-func TestSaveSession_restrictsExistingFilePermissions(t *testing.T) {
-	sessionPath := filepath.Join(t.TempDir(), "auth.json")
-	if err := os.WriteFile(sessionPath, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("seed session file: %v", err)
-	}
-
-	err := saveSession(runtimeDeps{sessionPath: sessionPath}, cliSession{
-		Server:      "http://server",
-		WorkspaceID: "wks_1",
-		PrincipalID: "usr_1",
-		Credential:  "csn_test",
-	})
-	if err != nil {
-		t.Fatalf("save session should succeed: %v", err)
-	}
-	info, err := os.Stat(sessionPath)
-	if err != nil {
-		t.Fatalf("session file should exist: %v", err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("session file permissions = %o, want 600", info.Mode().Perm())
-	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(sessionPath), ".auth.json.*.tmp"))
-	if err != nil {
-		t.Fatalf("glob temp session files: %v", err)
-	}
-	if len(matches) != 0 {
-		t.Fatalf("save session should not leave temp files: %v", matches)
-	}
-}
-
-func TestSaveSession_replacesExistingSessionWithCompleteJSON(t *testing.T) {
-	sessionPath := testSessionPath(t, "usr_old")
-
-	next := cliSession{
-		Server:      "http://server",
-		WorkspaceID: "wks_2",
-		PrincipalID: "usr_new",
-		Credential:  "csn_new",
-		CreatedAt:   "1970-01-01T00:00:10Z",
-	}
-	if err := saveSession(runtimeDeps{sessionPath: sessionPath}, next); err != nil {
-		t.Fatalf("save session should succeed: %v", err)
-	}
-	loaded, err := loadSession(runtimeDeps{sessionPath: sessionPath})
-	if err != nil {
-		t.Fatalf("load session should read replacement JSON: %v", err)
-	}
-	if loaded != next {
-		t.Fatalf("loaded session mismatch:\n got %#v\nwant %#v", loaded, next)
-	}
-}
-
-func TestLogout_retains_session_when_remote_revoke_fails(t *testing.T) {
-	sessionPath := testSessionPath(t, "usr_1")
-	client := &fakeHTTPClient{
-		status: http.StatusInternalServerError,
-		body:   `{"error":"down"}`,
-	}
-	deps := runtimeDeps{
-		stdout:      io.Discard,
-		stderr:      io.Discard,
-		client:      client,
-		sessionPath: sessionPath,
-	}
-
-	if err := runWithDeps([]string{"logout"}, ledger.NewMemoryJournal(), deps); err == nil || !strings.Contains(err.Error(), "local session was retained") {
-		t.Fatalf("logout error=%v, want retained-session error", err)
-	}
-	if _, err := os.Stat(sessionPath); err != nil {
-		t.Fatalf("logout should retain session for retry, stat err=%v", err)
-	}
-}
-
 func TestRemovedTokenFlag_failsBeforeHttp(t *testing.T) {
 	client := &fakeHTTPClient{status: http.StatusOK, body: `{}`}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--workspace", "wks_1",
 		"--token", "usr_1",
@@ -812,7 +598,7 @@ func TestCommandsRejectMissingRequiredFlagsBeforeSubmit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			journal := ledger.NewMemoryJournal()
 			client := &fakeHTTPClient{status: http.StatusOK, body: `{}`}
-			err := runWithDeps(tc.args, journal, runtimeDeps{
+			err := runWithTestDeps(tc.args, journal, runtimeDeps{
 				stdout: io.Discard,
 				stderr: io.Discard,
 				client: client,
@@ -838,7 +624,7 @@ func TestWorkspaceCreate_postsControlPlaneRequestWithStableIdempotencyKey(t *tes
 	}
 	var stdout bytes.Buffer
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"workspace", "create",
 		"--server", "http://server",
 		"--name", "Acme Research",
@@ -921,7 +707,7 @@ func TestWorkspaceCreate_caseOnlyKeyRetryConvergesToSameCanonicalRequest(t *test
 			return ""
 		}
 		commandArgs := append([]string{"workspace", "create"}, args...)
-		if err := runWithDeps(commandArgs, ledger.NewMemoryJournal(), deps); err != nil {
+		if err := runWithTestDeps(commandArgs, ledger.NewMemoryJournal(), deps); err != nil {
 			t.Fatalf("workspace create should succeed: %v", err)
 		}
 		if len(client.bodies) != 1 {
@@ -976,7 +762,7 @@ func TestWorkspaceCreate_usesExplicitIdempotencyKeyAndOmitsEmptyKey(t *testing.T
 		body:   `{"data":{"id":"wks_new","workspace_id":"wks_new","key":"acme-research","name":"Acme Research","creator_principal_id":"usr_1","created":false,"status":"duplicate"}}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"workspace", "create",
 		"--server", "http://server",
 		"--name", "Acme Research",
@@ -1005,17 +791,17 @@ func TestWorkspaceCreate_usesExplicitIdempotencyKeyAndOmitsEmptyKey(t *testing.T
 func TestWorkspaceCreate_requiresLoginSessionBeforeHttp(t *testing.T) {
 	client := &fakeHTTPClient{status: http.StatusOK, body: `{}`}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"workspace", "create",
 		"--name", "Acme Research",
 	}, ledger.NewMemoryJournal(), runtimeDeps{
-		stdout:      io.Discard,
-		stderr:      io.Discard,
-		client:      client,
-		sessionPath: filepath.Join(t.TempDir(), "missing-auth.json"),
-		newID:       fixedIDGenerator(),
+		stdout:           io.Discard,
+		stderr:           io.Discard,
+		client:           client,
+		identityProvider: testIdentityProvider(filepath.Join(t.TempDir(), "missing-auth.json")),
+		newID:            fixedIDGenerator(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "not logged in") {
+	if err == nil || !strings.Contains(err.Error(), "external identity integration unavailable") {
 		t.Fatalf("expected login error, got %v", err)
 	}
 	if client.calls != 0 {
@@ -1023,19 +809,19 @@ func TestWorkspaceCreate_requiresLoginSessionBeforeHttp(t *testing.T) {
 	}
 }
 
-func TestWorkspaceCreate_explicitServerDoesNotRequireSession(t *testing.T) {
+func TestWorkspaceCreate_explicitServerRequiresExternalIdentity(t *testing.T) {
 	client := &fakeHTTPClient{status: http.StatusOK, body: `{}`}
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"workspace", "create", "--server", "http://server", "--name", "Acme Research",
 	}, ledger.NewMemoryJournal(), runtimeDeps{
 		stdout: io.Discard, stderr: io.Discard, client: client,
-		sessionPath: filepath.Join(t.TempDir(), "missing-auth.json"),
+		identityProvider: testIdentityProvider(filepath.Join(t.TempDir(), "missing-auth.json")),
 	})
-	if err != nil {
-		t.Fatalf("explicit local server should not require a login session: %v", err)
+	if err == nil {
+		t.Fatal("explicit server bypassed external identity")
 	}
-	if client.calls != 1 {
-		t.Fatalf("expected one HTTP call, got %d", client.calls)
+	if client.calls != 0 {
+		t.Fatalf("expected no HTTP calls, got %d", client.calls)
 	}
 }
 
@@ -1045,7 +831,7 @@ func TestWorkspaceCreate_reportsServerErrorBody(t *testing.T) {
 		body:   `{"error":{"code":"workspace_key_conflict","message":"workspace key is already in use"}}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"workspace", "create",
 		"--server", "http://server",
 		"--name", "Acme Research",
@@ -1102,7 +888,7 @@ func TestObjectUpdate_submitsCanonicalCommandWithOnlySuppliedMutations(t *testin
 			}
 			args = append(args, tt.mutationArg...)
 
-			if err := runWithDeps(args, journal, cliRuntimeDeps(client)); err != nil {
+			if err := runWithTestDeps(args, journal, cliRuntimeDeps(client)); err != nil {
 				t.Fatalf("object update should succeed: %v", err)
 			}
 			command := ingestedCommandFromBody(t, client.bodies[0])
@@ -1133,18 +919,18 @@ func TestObjectCreate_requiresLoginSessionBeforeLedgerOrHttp(t *testing.T) {
 	journal := ledger.NewMemoryJournal()
 	client := &fakeHTTPClient{status: http.StatusOK, body: `{}`}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--workspace", "wks_1",
 		"--type", "contract",
 		"--title", "Acme",
 	}, journal, runtimeDeps{
-		stdout:      io.Discard,
-		stderr:      io.Discard,
-		client:      client,
-		sessionPath: filepath.Join(t.TempDir(), "missing-auth.json"),
+		stdout:           io.Discard,
+		stderr:           io.Discard,
+		client:           client,
+		identityProvider: testIdentityProvider(filepath.Join(t.TempDir(), "missing-auth.json")),
 	})
-	if err == nil || !strings.Contains(err.Error(), "not logged in") {
+	if err == nil || !strings.Contains(err.Error(), "external identity integration unavailable") {
 		t.Fatalf("expected login error, got %v", err)
 	}
 	if len(journal.Events()) != 0 {
@@ -1162,12 +948,13 @@ func TestObjectCreate_appends_ledger_before_http_submit(t *testing.T) {
 		body:   `{"command_id":"cmd_2","outcome":"applied","aggregate":{"type":"object_instance","id":"obj_1","version":1},"projection":{"workspace_id":"wks_1","projection_sequence":1}}`,
 	}
 	deps := cliRuntimeDeps(client)
-	deps.sessionPath = filepath.Join(t.TempDir(), "auth.json")
-	if err := saveSession(deps, cliSession{Server: "HTTP://SERVER/", WorkspaceID: "wks_1", PrincipalID: "usr_1", Credential: "usr_1"}); err != nil {
+	identityPath := filepath.Join(t.TempDir(), "auth.json")
+	deps.identityProvider = testIdentityProvider(identityPath)
+	if err := writeTestIdentity(identityPath, cliSession{Server: "HTTP://SERVER/", WorkspaceID: "wks_1", PrincipalID: "usr_1", Credential: "usr_1"}); err != nil {
 		t.Fatal(err)
 	}
 	deps.sleep = noSleep
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--workspace", "wks_1",
 		"--type", "contract",
@@ -1234,9 +1021,9 @@ func TestObjectCreate_rejectsDifferentUserActorBeforeLedgerOrKernelSubmit(t *tes
 		body:   `{"command_id":"cmd_1","outcome":"applied","projection":{"workspace_id":"wks_2","projection_sequence":1}}`,
 	}
 	deps := cliRuntimeDeps(client)
-	deps.sessionPath = testSessionPath(t, "usr_1")
+	deps.identityProvider = testIdentityProvider(testSessionPath(t, "usr_1"))
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1263,7 +1050,7 @@ func TestObjectCreate_submitsKernelCommandAndRecordsLocalAttempt(t *testing.T) {
 	}
 	deps := cliRuntimeDeps(client)
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1291,7 +1078,7 @@ func TestObjectCreate_sendsExplicitIdempotencyKeyForServerDeduping(t *testing.T)
 	idGenerator := fixedIDGenerator()
 
 	for i := 0; i < 2; i++ {
-		err := runWithDeps([]string{
+		err := runWithTestDeps([]string{
 			"object", "create",
 			"--server", "http://server",
 			"--workspace", "wks_1",
@@ -1328,7 +1115,7 @@ func TestObjectCreate_appends_rejected_when_response_body_read_fails(t *testing.
 		readErr: errors.New("read failed"),
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1367,7 +1154,7 @@ func TestObjectCreate_appendsRejectedWhenHTTPSubmitFails(t *testing.T) {
 	journal := ledger.NewMemoryJournal()
 	client := &fakeHTTPClient{err: errors.New("dial failed")}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1409,7 +1196,7 @@ func TestObjectCreate_retriesTransientServerErrorWithSameIntent(t *testing.T) {
 		},
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1458,7 +1245,7 @@ func TestObjectCreate_retriesRetryableConflictWithSameIntent(t *testing.T) {
 	deps := cliRuntimeDeps(client)
 	deps.sleep = noSleep
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1498,7 +1285,7 @@ func TestObjectCreate_doesNotRetryStaleConflict(t *testing.T) {
 	deps := cliRuntimeDeps(client)
 	deps.sleep = noSleep
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1528,7 +1315,7 @@ func TestObjectCreate_truncatesRejectedResponseBodyInErrorAndLedger(t *testing.T
 		body:   body,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1572,7 +1359,7 @@ func TestObjectCreate_marksReceiptInvalidWhenSuccessfulReceiptCannotParse(t *tes
 		body:   `not-json`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1610,7 +1397,7 @@ func TestObjectCreate_returnsReceiptWhenCommitLedgerAppendFailsAfterKernelSucces
 	var stdout strings.Builder
 	var stderr strings.Builder
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1642,7 +1429,7 @@ func TestObjectCreate_does_not_submit_when_ledger_append_fails(t *testing.T) {
 		body:   `{}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1671,7 +1458,7 @@ func TestObjectCreate_doesNotSubmitWhenLedgerSubmittedAppendFails(t *testing.T) 
 		body:   `{}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1712,7 +1499,7 @@ func TestRemovedLedgerCommandsAndOldCLIAreUnknownWithoutWrites(t *testing.T) {
 	journal := ledger.NewMemoryJournal()
 	client := &fakeHTTPClient{status: http.StatusOK, body: `{}`}
 	for _, args := range [][]string{{"audit", "retry"}, {"ledger", "export"}, {"ledger", "sync"}, {"ledger", "retry", "--audit", "attempt_1"}} {
-		err := runWithDeps(args, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client})
+		err := runWithTestDeps(args, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client})
 		if err == nil {
 			t.Fatalf("%v should be unknown", args)
 		}
@@ -1739,10 +1526,10 @@ func TestLedgerRetryReplaysExplicitAttempt(t *testing.T) {
 	client := &fakeHTTPClient{status: http.StatusOK, body: `{"command_id":"cmd_1","outcome":"duplicate","projection":{"workspace_id":"wks_1","projection_sequence":1}}`}
 	var retry bytes.Buffer
 	sessionPath := filepath.Join(t.TempDir(), "auth.json")
-	if err := saveSession(runtimeDeps{sessionPath: sessionPath}, cliSession{Server: "http://server", WorkspaceID: "wks_1", PrincipalID: "dev", Credential: "dev"}); err != nil {
+	if err := writeTestIdentity(sessionPath, cliSession{Server: "http://server", WorkspaceID: "wks_1", PrincipalID: "dev", Credential: "dev"}); err != nil {
 		t.Fatal(err)
 	}
-	err := runWithDeps([]string{"ledger", "retry", "--attempt", "attempt_1", "--server", "http://server"}, journal, runtimeDeps{stdout: &retry, stderr: io.Discard, client: client, sessionPath: sessionPath, now: func() time.Time { return time.Unix(13, 0).UTC() }, newID: fixedIDGenerator(), sleep: noSleep})
+	err := runWithTestDeps([]string{"ledger", "retry", "--attempt", "attempt_1", "--server", "http://server"}, journal, runtimeDeps{stdout: &retry, stderr: io.Discard, client: client, identityProvider: testIdentityProvider(sessionPath), now: func() time.Time { return time.Unix(13, 0).UTC() }, newID: fixedIDGenerator(), sleep: noSleep})
 	if err != nil {
 		t.Fatalf("ledger retry: %v", err)
 	}
@@ -1779,10 +1566,10 @@ func TestLedgerRetryReadsExplicitBboltLedger(t *testing.T) {
 	}
 	client := &fakeHTTPClient{status: http.StatusOK, body: `{"command_id":"cmd_1","outcome":"duplicate","projection":{"workspace_id":"wks_1","projection_sequence":1}}`}
 	sessionPath := filepath.Join(t.TempDir(), "auth.json")
-	if err := saveSession(runtimeDeps{sessionPath: sessionPath}, cliSession{Server: "http://server", WorkspaceID: "wks_1", PrincipalID: "dev", Credential: "dev"}); err != nil {
+	if err := writeTestIdentity(sessionPath, cliSession{Server: "http://server", WorkspaceID: "wks_1", PrincipalID: "dev", Credential: "dev"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runWithDeps([]string{"ledger", "retry", "--journal", journalPath, "--attempt", "attempt_1", "--server", "http://server"}, ledger.NewMemoryJournal(), runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client, sessionPath: sessionPath, now: func() time.Time { return time.Unix(13, 0).UTC() }, newID: fixedIDGenerator(), sleep: noSleep}); err != nil {
+	if err := runWithTestDeps([]string{"ledger", "retry", "--journal", journalPath, "--attempt", "attempt_1", "--server", "http://server"}, ledger.NewMemoryJournal(), runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client, identityProvider: testIdentityProvider(sessionPath), now: func() time.Time { return time.Unix(13, 0).UTC() }, newID: fixedIDGenerator(), sleep: noSleep}); err != nil {
 		t.Fatalf("ledger retry explicit bbolt: %v", err)
 	}
 	if client.calls != 1 || client.requests[0].Header.Get(idempotencyRetryHeader) != "attempt_1" {
@@ -1818,7 +1605,7 @@ func TestObjectTypeDefine_syncs_ingested_command_intent_with_schema_payload(t *t
 		body:   `{"command_id":"cmd_2","outcome":"applied","aggregate":{"type":"object_type","id":"otp_1","version":1},"projection":{"workspace_id":"wks_1","projection_sequence":1}}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object-type", "define",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1860,7 +1647,7 @@ func TestObjectTypeDefine_syncs_ingested_command_intent_with_schema_payload(t *t
 func TestObjectTypeSchemaEvolveSubmitsExactCASCommand(t *testing.T) {
 	journal := ledger.NewMemoryJournal()
 	client := &fakeHTTPClient{status: http.StatusOK, body: `{"command_id":"cmd_1","outcome":"applied","aggregate":{"type":"object_type","id":"otp_1","version":2},"projection":{"workspace_id":"wks_1","projection_sequence":1}}`}
-	err := runWithDeps([]string{"object-type", "schema-evolve", "--server", "http://server", "--workspace", "wks_1", "--id", "otp_1", "--version", "1", "--field-schema", `{"type":"object"}`, "--idempotency-key", "stable"}, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client, now: func() time.Time { return time.Unix(10, 0).UTC() }, newID: fixedIDGenerator()})
+	err := runWithTestDeps([]string{"object-type", "schema-evolve", "--server", "http://server", "--workspace", "wks_1", "--id", "otp_1", "--version", "1", "--field-schema", `{"type":"object"}`, "--idempotency-key", "stable"}, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client, now: func() time.Time { return time.Unix(10, 0).UTC() }, newID: fixedIDGenerator()})
 	if err != nil {
 		t.Fatalf("schema evolve: %v", err)
 	}
@@ -1889,7 +1676,7 @@ func TestObjectTypeWordDefine_requires_and_emits_explicit_noun_fields(t *testing
 		body:   `{"command_id":"cmd_2","outcome":"applied","aggregate":{"type":"object_type","id":"otp_1","version":1},"projection":{"workspace_id":"wks_1","projection_sequence":1}}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"define",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1926,7 +1713,7 @@ func TestObjectTypeWordCreate_submits_object_create_with_implicit_type(t *testin
 		},
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"contracts", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -1964,7 +1751,7 @@ func TestObjectTypeWordMove_submits_object_move_command(t *testing.T) {
 		},
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"contracts", "move",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -2008,7 +1795,7 @@ func TestObjectTypeWordLink_submits_relation_link_command(t *testing.T) {
 		},
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"contracts", "link",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -2048,7 +1835,7 @@ func TestObjectTypeWordCreate_does_not_dispatch_by_singular_name(t *testing.T) {
 		},
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"contract", "create",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -2079,7 +1866,7 @@ func TestObjectTypeWordHelp_fetches_command_surface(t *testing.T) {
 		},
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"help", "contracts",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -2111,7 +1898,7 @@ func TestObjectTypeWordHelp_requires_explicit_surface_noun_names(t *testing.T) {
 		},
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"help", "contracts",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -2133,7 +1920,7 @@ func TestObjectTypeWordHelp_works_as_word_subcommand(t *testing.T) {
 		},
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"contracts", "help",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -2160,7 +1947,7 @@ func TestObjectTypeWordSubcommandHelp_uses_command_surface(t *testing.T) {
 		},
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"contracts", "create", "--help",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -2189,7 +1976,7 @@ func TestRelationDefine_syncs_ingested_command_intent_with_object_type_precondit
 		body:   `{"command_id":"cmd_2","outcome":"applied","aggregate":{"type":"relation_definition","id":"rdf_1","version":1},"projection":{"workspace_id":"wks_1","projection_sequence":1}}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"relation", "define",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -2241,7 +2028,7 @@ func TestRelationLink_syncs_ingested_command_intent_with_endpoint_preconditions(
 		body:   `{"command_id":"cmd_2","outcome":"applied","aggregate":{"type":"object_relation","id":"rel_1","version":1},"projection":{"workspace_id":"wks_1","projection_sequence":1}}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"relation", "link",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -2291,7 +2078,7 @@ func TestRelationUnlink_syncs_ingested_command_intent_with_relation_precondition
 		body:   `{"command_id":"cmd_2","outcome":"applied","aggregate":{"type":"object_relation","id":"rel_1","version":2},"projection":{"workspace_id":"wks_1","projection_sequence":2}}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"relation", "unlink",
 		"--server", "http://server",
 		"--workspace", "wks_1",
@@ -2330,15 +2117,15 @@ func TestRelationUnlink_syncs_ingested_command_intent_with_relation_precondition
 }
 
 func TestObjectsList_withoutWorkspaceKeepsLoginError(t *testing.T) {
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"objects", "list",
 	}, ledger.NewMemoryJournal(), runtimeDeps{
-		stdout:      io.Discard,
-		stderr:      io.Discard,
-		client:      &fakeHTTPClient{status: http.StatusOK, body: `{}`},
-		sessionPath: filepath.Join(t.TempDir(), "missing-auth.json"),
+		stdout:           io.Discard,
+		stderr:           io.Discard,
+		client:           &fakeHTTPClient{status: http.StatusOK, body: `{}`},
+		identityProvider: testIdentityProvider(filepath.Join(t.TempDir(), "missing-auth.json")),
 	})
-	if err == nil || !strings.Contains(err.Error(), "not logged in") {
+	if err == nil || !strings.Contains(err.Error(), "external identity integration unavailable") {
 		t.Fatalf("expected wrapped login error, got %v", err)
 	}
 }
@@ -2350,7 +2137,7 @@ func TestObjectGet_canonicalReadSendsBearerToken(t *testing.T) {
 	}
 	var stdout strings.Builder
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "get",
 		"--server", "http://kernel",
 		"--workspace", "wks_1",
@@ -2377,16 +2164,16 @@ func TestObjectGet_canonicalReadEscapesPathSegments(t *testing.T) {
 		body:   `{"data":{"id":"obj/1 %"},"consistency":{"source":"kernel"}}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"object", "get",
 		"--server", "http://kernel",
 		"--workspace", "wks/a b%",
 		"--id", "obj/1 %",
 	}, ledger.NewMemoryJournal(), runtimeDeps{
-		stdout:      io.Discard,
-		stderr:      io.Discard,
-		client:      client,
-		sessionPath: testSessionPath(t, "usr_1"),
+		stdout:           io.Discard,
+		stderr:           io.Discard,
+		client:           client,
+		identityProvider: testIdentityProvider(testSessionPath(t, "usr_1")),
 	})
 	if err != nil {
 		t.Fatalf("canonical object get should succeed: %v", err)
@@ -2396,30 +2183,27 @@ func TestObjectGet_canonicalReadEscapesPathSegments(t *testing.T) {
 	}
 }
 
-func TestObjectsList_explicitServerUsesLocalNoneAuth(t *testing.T) {
+func TestObjectsList_explicitServerRequiresExternalIdentity(t *testing.T) {
 	client := &fakeHTTPClient{
 		status: http.StatusOK,
 		body:   `{}`,
 	}
 
-	err := runWithDeps([]string{
+	err := runWithTestDeps([]string{
 		"objects", "list",
 		"--server", "http://kernel",
 		"--workspace", "wks_1",
 	}, ledger.NewMemoryJournal(), runtimeDeps{
-		stdout:      io.Discard,
-		stderr:      io.Discard,
-		client:      client,
-		sessionPath: filepath.Join(t.TempDir(), "missing-auth.json"),
+		stdout:           io.Discard,
+		stderr:           io.Discard,
+		client:           client,
+		identityProvider: testIdentityProvider(filepath.Join(t.TempDir(), "missing-auth.json")),
 	})
-	if err != nil {
-		t.Fatalf("explicit local server should not require login: %v", err)
+	if err == nil {
+		t.Fatal("explicit server bypassed external identity")
 	}
-	if client.calls != 1 {
-		t.Fatalf("expected one canonical read, got %d", client.calls)
-	}
-	if got := client.requests[0].Header.Get("Authorization"); got != "" {
-		t.Fatalf("none auth must not send a bearer credential, got %q", got)
+	if client.calls != 0 {
+		t.Fatalf("expected no canonical reads, got %d", client.calls)
 	}
 }
 
@@ -2585,7 +2369,7 @@ func workspaceCreateIdempotencyKeyForArgs(t *testing.T, args ...string) string {
 		return ""
 	}
 	commandArgs := append([]string{"workspace", "create"}, args...)
-	if err := runWithDeps(commandArgs, ledger.NewMemoryJournal(), deps); err != nil {
+	if err := runWithTestDeps(commandArgs, ledger.NewMemoryJournal(), deps); err != nil {
 		t.Fatalf("workspace create should succeed: %v", err)
 	}
 	if len(client.bodies) != 1 {

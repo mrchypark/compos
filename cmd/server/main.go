@@ -91,33 +91,8 @@ func main() {
 		return
 	}
 	handler := server.New(db)
-	auth, err := server.AuthConfigFromEnv()
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err := handler.ConfigureAuth(auth); err != nil {
-		log.Fatal(err)
-	}
-	if name := os.Getenv("COMPOS_BOOTSTRAP_WORKSPACE_NAME"); name != "" {
-		if auth.Mode != server.AuthModePocketBase || auth.PocketBaseAutoWorkspaceID != "" {
-			log.Fatal("workspace bootstrap requires PocketBase mode without an explicit auto workspace ID")
-		}
-		workspaceID, err := handler.BootstrapLoginWorkspace(ctx, name)
-		if err != nil {
-			log.Fatal(err)
-		}
-		auth.PocketBaseAutoWorkspaceID = workspaceID
-		if err := handler.ConfigureAuth(auth); err != nil {
-			log.Fatal(err)
-		}
-		log.Printf("login workspace ready: %s", workspaceID)
-	}
-	syncerToken := os.Getenv("COMPOS_SEARCH_SYNCER_TOKEN")
 	syncerWorkspaceID := os.Getenv("COMPOS_SEARCH_SYNCER_WORKSPACE_ID")
-	if syncerWorkspaceID == "" && syncerToken != "" {
-		syncerWorkspaceID = auth.PocketBaseAutoWorkspaceID
-	}
-	if err := handler.ConfigureSearchSyncer(syncerToken, syncerWorkspaceID); err != nil {
+	if err := handler.ConfigureSearchSyncer(syncerWorkspaceID); err != nil {
 		log.Fatal(err)
 	}
 	if err := handler.EnableSearch(*searchURL, *searchIndex, os.Getenv("COMPOS_MEILISEARCH_API_KEY")); err != nil {

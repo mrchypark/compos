@@ -30,10 +30,10 @@ This package ships:
 
 - $COMMAND_PATH
 
-Compos uses an embedded bbolt request ledger for local CLI durability. Normal
-mutation commands only need a Compos login session:
+Compos uses an embedded bbolt request ledger for local CLI durability. Commands
+require a trusted external identity integration. Local account commands were removed;
+the standalone binary currently fails closed until that integration is supplied.
 
-    $COMMAND_PATH login --server https://compos.example.com --workspace wks_default
     $COMMAND_PATH object-type define --key contracts --singular contract --plural contracts --field-schema '{"type":"object","properties":{}}'
     $COMMAND_PATH contracts create --title Acme
 

@@ -81,21 +81,6 @@ spec:
               value: compos-prod-602454948273-20260815
             - name: COMPOS_RHIZA_OBJECT_DURABILITY
               value: before-ack
-            - name: COMPOS_AUTH_MODE
-              value: pocketbase
-            - name: COMPOS_POCKETBASE_URL
-              value: http://patch-data.patch.svc.cluster.local:8090
-            - name: COMPOS_POCKETBASE_AUTH_COLLECTION
-              value: users
-            - name: COMPOS_AUTH_ALLOWED_EMAIL_DOMAINS
-              value: example.invalid
-            - name: COMPOS_BOOTSTRAP_WORKSPACE_NAME
-              value: Compos
-            - name: COMPOS_SEARCH_SYNCER_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: compos-syncer-auth
-                  key: compos-token
             - name: COMPOS_MEILISEARCH_URL
               value: http://meilisearch.compos.svc.cluster.local:7700
             - name: COMPOS_MEILISEARCH_INDEX_UID

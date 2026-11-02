@@ -210,9 +210,7 @@ func TestWorkflowRouteWaitsForSubmissionWithoutAwaitNode(t *testing.T) {
 func TestWorkflowRouteUsesPinnedSchemaAndSubmittingHumanForNextInvoke(t *testing.T) {
 	ctx := context.Background()
 	s, handler, execute := newWorkflowTestRuntime(t)
-	if _, err := s.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','reviewer','member','2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatal(err)
-	}
+
 	quoteType := execute("cmd_handoff_quote_type", "object_type.define", "object_type", nil, map[string]any{
 		"key": "quotes", "singular": "Quote", "plural": "Quotes",
 		"field_schema": map[string]any{"type": "object", "properties": map[string]any{"amount": map[string]any{"type": "number"}}},
@@ -522,7 +520,7 @@ func TestWorkflowSchedulerStopsWhenStoreCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := New(s)
+	handler := newTestServer(s)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -557,10 +555,8 @@ func newWorkflowTestRuntime(t *testing.T) (*store.Store, *Server, workflowTestEx
 	if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-		t.Fatal(err)
-	}
-	handler := New(s)
+
+	handler := newTestServer(s)
 	t.Cleanup(func() { _ = handler.Close() })
 	execute := func(id, commandType, aggregateType string, aggregateID *string, payload any) kernel.Receipt {
 		t.Helper()

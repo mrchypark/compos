@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -53,7 +54,7 @@ func TestSyncOnceRebuildsSnapshotWhenIndexWasRecreated(t *testing.T) {
 		if r.URL.Path != "/api/v1/workspaces/wks_1/projection/snapshot" {
 			t.Fatalf("unexpected Compos path %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"snapshot":{"workspace_id":"wks_1","projection_sequence":4,"schema_version":2,"objects":[],"knowledge":[]}}`))
+		_, _ = w.Write([]byte(`{"snapshot":{"workspace_id":"wks_1","projection_sequence":4,"schema_version":3,"objects":[]}}`))
 	}))
 	defer compos.Close()
 
@@ -78,7 +79,7 @@ func TestSyncOnceUsesEventsAfterZeroSequenceSnapshot(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/workspaces/wks_1/projection/snapshot":
 			snapshots++
-			_, _ = w.Write([]byte(`{"snapshot":{"workspace_id":"wks_1","projection_sequence":0,"objects":[],"knowledge":[]}}`))
+			_, _ = w.Write([]byte(`{"snapshot":{"workspace_id":"wks_1","projection_sequence":0,"objects":[]}}`))
 		case "/api/v1/workspaces/wks_1/projection/events":
 			events++
 			_, _ = w.Write([]byte(`{"events":[{"id":"evt_1","workspace_id":"wks_1","projection_sequence":1,"aggregate_type":"ignored"}]}`))
@@ -131,7 +132,7 @@ func TestSyncOnceDiscoversWorkspaceAndResetsOnRotation(t *testing.T) {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		snapshots = append(snapshots, r.URL.Path)
-		_, _ = w.Write([]byte(`{"snapshot":{"workspace_id":"` + workspace + `","projection_sequence":3,"objects":[],"knowledge":[]}}`))
+		_, _ = w.Write([]byte(`{"snapshot":{"workspace_id":"` + workspace + `","projection_sequence":3,"objects":[]}}`))
 	}))
 	defer compos.Close()
 	state := SyncState{}
@@ -190,7 +191,7 @@ func TestSyncOnceWorkspaceRotationClearsOldWorkspaceBeforeStateChange(t *testing
 			return
 		}
 		snapshots = append(snapshots, r.URL.Path)
-		_, _ = w.Write([]byte(`{"snapshot":{"workspace_id":"wks_two","projection_sequence":3,"objects":[],"knowledge":[]}}`))
+		_, _ = w.Write([]byte(`{"snapshot":{"workspace_id":"wks_two","projection_sequence":3,"objects":[]}}`))
 	}))
 	defer compos.Close()
 
@@ -227,16 +228,6 @@ func TestSyncOnceDoesNotAdvanceCursorWhenEventFails(t *testing.T) {
 	}
 }
 
-func TestKnowledgeSearchIDIsStableAndWorkspaceScoped(t *testing.T) {
-	first := knowledgeSearchID("wks_1", "core:search")
-	if first != knowledgeSearchID("wks_1", "core:search") || first == knowledgeSearchID("wks_2", "core:search") {
-		t.Fatalf("unexpected IDs: %q %q", first, knowledgeSearchID("wks_2", "core:search"))
-	}
-	if !strings.HasPrefix(first, "knw_") || strings.Contains(first, ":") {
-		t.Fatalf("invalid Meilisearch ID %q", first)
-	}
-}
-
 func TestObjectSearchIDIsStableAndWorkspaceScoped(t *testing.T) {
 	canonicalID := "obj_backoffice/workerp/samplecustomer/v1"
 	first := objectSearchID("wks_1", canonicalID)
@@ -245,40 +236,6 @@ func TestObjectSearchIDIsStableAndWorkspaceScoped(t *testing.T) {
 	}
 	if !strings.HasPrefix(first, "obj_") || strings.Contains(first, "/") {
 		t.Fatalf("invalid Meilisearch ID %q", first)
-	}
-}
-
-func TestKnowledgeIndexAndRemovalUseSameSearchID(t *testing.T) {
-	var calls []string
-	meili := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/tasks/") {
-			_, _ = w.Write([]byte(`{"uid":1,"status":"succeeded","type":"documentAdditionOrUpdate","enqueuedAt":"2026-01-01T00:00:00Z"}`))
-			return
-		}
-		calls = append(calls, r.Method+" "+r.URL.Path)
-		if r.Method == http.MethodPost {
-			var body json.RawMessage
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			calls = append(calls, string(body))
-		}
-		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"taskUid":1}`))
-	}))
-	defer meili.Close()
-	client := meilisearch.New(meili.URL)
-	canonicalID := "core:search"
-	want := knowledgeSearchID("wks_1", canonicalID)
-	if err := indexKnowledgeDocuments(context.Background(), client, Config{IndexUID: "objects"}, []KnowledgeDocument{{ID: canonicalID, WorkspaceID: "wks_1"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := processKnowledgeEvent(context.Background(), client, Config{IndexUID: "objects"}, ProjectionEvent{WorkspaceID: "wks_1", AggregateID: canonicalID, Payload: map[string]any{"operation": "removed"}}); err != nil {
-		t.Fatal(err)
-	}
-	joined := strings.Join(calls, "\n")
-	for _, value := range []string{`"id":"` + want + `"`, `"knowledge_id":"core:search"`, "DELETE /indexes/objects/documents/" + want} {
-		if !strings.Contains(joined, value) {
-			t.Fatalf("missing %q in %s", value, joined)
-		}
 	}
 }
 
@@ -372,5 +329,56 @@ func TestProcessObjectEventsUsesProjectionEventTypeAndCanonicalPayload(t *testin
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in requests:\n%s", want, joined)
 		}
+	}
+}
+
+func TestLegacyKnowledgeEventsAdvanceCursorWithoutIndexing(t *testing.T) {
+	meili := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("legacy event must not touch search: %s %s", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer meili.Close()
+	compos := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"events":[{"id":"legacy","workspace_id":"wks_1","projection_sequence":8,"aggregate_type":"knowledge_document","aggregate_id":"core:old","payload":{"operation":"accepted"}}]}`))
+	}))
+	defer compos.Close()
+	state := SyncState{LastSequence: 7, SnapshotReady: true}
+	if err := syncFromEvents(context.Background(), compos.Client(), meilisearch.New(meili.URL), Config{ComposEndpoint: compos.URL, WorkspaceID: "wks_1", IndexUID: "objects"}, &state); err != nil || state.LastSequence != 8 {
+		t.Fatalf("err=%v state=%+v", err, state)
+	}
+}
+
+func TestRestartRebuildClearsLegacyWorkspaceDocuments(t *testing.T) {
+	var cleared bool
+	meili := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/indexes/objects/documents/delete" {
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `workspace_id = \"wks_1\"`) {
+				t.Errorf("unbounded clear: %s", body)
+			}
+			cleared = true
+		}
+		if strings.HasPrefix(r.URL.Path, "/tasks/") {
+			_, _ = w.Write([]byte(`{"uid":1,"status":"succeeded"}`))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/indexes/objects" {
+			_, _ = w.Write([]byte(`{"uid":"objects","primaryKey":"id"}`))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"taskUid":1}`))
+	}))
+	defer meili.Close()
+	compos := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"snapshot":{"workspace_id":"wks_1","projection_sequence":9,"schema_version":3,"objects":[]}}`))
+	}))
+	defer compos.Close()
+	state := SyncState{}
+	if err := syncOnce(context.Background(), compos.Client(), meilisearch.New(meili.URL), Config{ComposEndpoint: compos.URL, WorkspaceID: "wks_1", IndexUID: "objects"}, &state); err != nil {
+		t.Fatal(err)
+	}
+	if !cleared || !state.SnapshotReady || state.LastSequence != 9 {
+		t.Fatalf("cleared=%v state=%+v", cleared, state)
 	}
 }

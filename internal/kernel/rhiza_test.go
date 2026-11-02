@@ -20,14 +20,11 @@ func TestKernelCommitsThroughEmbeddedRhiza(t *testing.T) {
 	}
 	defer s.Close()
 	one := int64(1)
-	if err := s.ApplyStatements(ctx, "kernel-fixture", []rhiza.SQLStatement{
-		{SQL: `INSERT INTO workspaces VALUES('wks_1','one','One',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, ExpectedRowsAffected: &one},
-		{SQL: `INSERT INTO workspace_memberships VALUES('wks_1','dev','owner','2026-01-01T00:00:00Z')`, ExpectedRowsAffected: &one},
-	}); err != nil {
+	if err := s.ApplyStatements(ctx, "kernel-fixture", []rhiza.SQLStatement{{SQL: `INSERT INTO workspaces VALUES('wks_1','one','One',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, ExpectedRowsAffected: &one}}); err != nil {
 		t.Fatal(err)
 	}
 
-	executor := NewStoreExecutor(s)
+	executor := testStoreExecutor(s)
 	define := command(
 		"cmd_rhiza_type", "idem_rhiza_type", "object_type.define", "object_type", nil,
 		map[string]any{"key": "contracts", "singular": "Contract", "plural": "Contracts", "field_schema": map[string]any{"type": "object"}},
@@ -51,7 +48,7 @@ func TestRetiredObjectTypeTemplateSetIsRejectedByRhiza(t *testing.T) {
 	s := openRhizaKernelStore(t, ctx, "kernel-retired-template")
 	defer s.Close()
 	target := "otp_retired"
-	_, err := NewStoreExecutor(s).Execute(ctx, "dev", command("cmd_retired_template", "idem_retired_template", "object_type.template_set", "object_type", &target, map[string]any{}))
+	_, err := testStoreExecutor(s).Execute(ctx, "dev", command("cmd_retired_template", "idem_retired_template", "object_type.template_set", "object_type", &target, map[string]any{}))
 	var rejected *CommandError
 	if !errors.As(err, &rejected) || rejected.Outcome != "validation_failed" {
 		t.Fatalf("error=%v", err)
@@ -68,18 +65,17 @@ func TestKernelRhizaPreconditionFailureRollsBack(t *testing.T) {
 	one := int64(1)
 	if err := s.ApplyStatements(ctx, "kernel-conflict-fixture", []rhiza.SQLStatement{
 		{SQL: `INSERT INTO workspaces VALUES('wks_1','one','One',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, ExpectedRowsAffected: &one},
-		{SQL: `INSERT INTO workspace_memberships VALUES('wks_1','dev','owner','2026-01-01T00:00:00Z')`, ExpectedRowsAffected: &one},
-		{SQL: `INSERT INTO object_types(id,workspace_id,key,singular,plural,schema_version,field_schema_json,relation_schema_json,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES('otp_guard','wks_1','guard','Guard','Guards',1,'{"type":"object"}','{"links":[]}',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','dev','dev')`, ExpectedRowsAffected: &one},
-		{SQL: `INSERT INTO object_type_schema_revisions(workspace_id,object_type_id,schema_version,field_schema_json,relation_schema_json,digest,created_at,created_by_principal_id) VALUES('wks_1','otp_guard',1,'{"type":"object"}','{"links":[]}','sha256:test','2026-01-01T00:00:00Z','dev')`, ExpectedRowsAffected: &one},
+		{SQL: `INSERT INTO object_types(id,workspace_id,key,singular,plural,field_schema_json,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES('otp_guard','wks_1','guard','Guard','Guards','{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','dev','dev')`, ExpectedRowsAffected: &one},
 	}); err != nil {
 		t.Fatal(err)
 	}
+
 	guarded := command(
 		"cmd_conflict", "idem_conflict", "object_type.define", "object_type", nil,
 		map[string]any{"key": "should-not-exist", "singular": "Item", "plural": "Items", "field_schema": map[string]any{"type": "object"}},
 	)
 	guarded.Preconditions = []Precondition{{AggregateType: "object_type", AggregateID: "otp_guard", ExpectedVersion: 2}}
-	_, err = NewStoreExecutor(s).Execute(ctx, "dev", guarded)
+	_, err = testStoreExecutor(s).Execute(ctx, "dev", guarded)
 	var rejected *CommandError
 	if !errors.As(err, &rejected) || rejected.Outcome != "precondition_failed" {
 		t.Fatalf("error=%v", err)
@@ -111,7 +107,7 @@ func TestKernelRhizaRecognizesEveryRegisteredCommand(t *testing.T) {
 			aggregateID = &missing
 		}
 		c := command("cmd_registered_"+name, "idem_registered_"+name, definition.WireName, definition.AllowedTargetAggregateTypes[0], aggregateID, map[string]any{})
-		_, err = NewStoreExecutor(s).executeRhiza(ctx, "dev", c)
+		_, err = testStoreExecutor(s).executeRhiza(ctx, "dev", c)
 		var rejected *CommandError
 		if !errors.As(err, &rejected) || rejected.Outcome == "unsupported_storage" {
 			t.Fatalf("definition[%d] %s error=%v", i, definition.WireName, err)
@@ -143,7 +139,7 @@ func TestKernelRhizaObjectTypeAndRelationLifecycle(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-lifecycle-test")
 	defer s.Close()
-	executor := NewStoreExecutor(s)
+	executor := testStoreExecutor(s)
 
 	left := execute(t, executor, "dev", command("cmd_left", "idem_left", "object_type.define", "object_type", nil, map[string]any{
 		"key": "customers", "singular": "Customer", "plural": "Customers",
@@ -219,7 +215,7 @@ func TestKernelRhizaLifecycleFailuresRollBack(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-lifecycle-failure-test")
 	defer s.Close()
-	executor := NewStoreExecutor(s)
+	executor := testStoreExecutor(s)
 	typeReceipt := execute(t, executor, "dev", command("cmd_base", "idem_base", "object_type.define", "object_type", nil, map[string]any{
 		"key": "items", "singular": "Item", "plural": "Items", "field_schema": map[string]any{"type": "object"},
 	}))
@@ -279,28 +275,11 @@ func TestKernelRhizaLifecycleFailuresRollBack(t *testing.T) {
 	}
 }
 
-func TestKernelRhizaDelegatedServiceCapability(t *testing.T) {
-	ctx := context.Background()
-	s := openRhizaKernelStore(t, ctx, "kernel-service-capability-test")
-	defer s.Close()
-	one := int64(1)
-	if err := s.ApplyStatements(ctx, "service-capability", []rhiza.SQLStatement{{SQL: `INSERT INTO actor_capabilities(id,workspace_id,principal_id,actor_type,actor_id,command_type,causation_source,relation_definition_id,idempotency_key_prefix,created_at,updated_at) VALUES('cap_1','wks_1','dev','service','importer','object_type.define','api','','service:','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, ExpectedRowsAffected: &one}}); err != nil {
-		t.Fatal(err)
-	}
-	define := command("cmd_service", "service:type", "object_type.define", "object_type", nil, map[string]any{"key": "imports", "singular": "Import", "plural": "Imports", "field_schema": map[string]any{"type": "object"}})
-	define.RequestedActor = &Actor{Type: "service", ID: "importer"}
-	receipt := execute(t, NewStoreExecutor(s), "dev", define)
-	var effective string
-	if err := s.ReadRow(ctx, store.ReadLinearizable, `SELECT effective_actor_json FROM command_ledger WHERE command_id=?`, receipt.CommandID).Scan(&effective); err != nil || effective != `{"type":"service","id":"importer"}` {
-		t.Fatalf("effective=%s err=%v", effective, err)
-	}
-}
-
 func TestKernelRhizaConcurrentDuplicateConverges(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-concurrent-duplicate-test")
 	defer s.Close()
-	executor := NewStoreExecutor(s)
+	executor := testStoreExecutor(s)
 	define := command("cmd_concurrent", "idem_concurrent", "object_type.define", "object_type", nil, map[string]any{
 		"key": "concurrent", "singular": "Concurrent", "plural": "Concurrent", "field_schema": map[string]any{"type": "object"},
 	})
@@ -350,7 +329,7 @@ func TestKernelRhizaRelationSchemasPreserveIncidentAndSelfRelations(t *testing.T
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-relation-schema-test")
 	defer s.Close()
-	executor := NewStoreExecutor(s)
+	executor := testStoreExecutor(s)
 	ids := map[string]string{}
 	for _, key := range []string{"a", "b", "c"} {
 		receipt := execute(t, executor, "dev", command("cmd_type_"+key, "idem_type_"+key, "object_type.define", "object_type", nil, map[string]any{
@@ -407,7 +386,7 @@ func TestKernelRhizaWorldSpecWorkAndKernelFunction(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-world-work-test")
 	defer s.Close()
-	executor := NewStoreExecutor(s)
+	executor := testStoreExecutor(s)
 	executor.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 	execute(t, executor, "dev", command("rhz_cmd_type", "rhz_idem_type", "object_type.define", "object_type", nil, map[string]any{"key": "requests", "singular": "Request", "plural": "Requests", "field_schema": map[string]any{"type": "object", "additionalProperties": true, "state_machine": map[string]any{"initial": "requested", "transitions": map[string]any{"requested": []any{"approved"}, "approved": []any{}}}}}))
 	object := execute(t, executor, "dev", command("rhz_cmd_object", "rhz_idem_object", "object.create", "object_instance", nil, map[string]any{"object_type_key": "requests", "title": "R-1", "values": map[string]any{}}))
@@ -453,7 +432,7 @@ func TestKernelRhizaExternalFunctionAndAgentCallbacks(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-external-agent-test")
 	defer s.Close()
-	executor := NewStoreExecutor(s)
+	executor := testStoreExecutor(s)
 	executor.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 	execute(t, executor, "dev", command("rhz_ext_type", "rhz_ext_type_i", "object_type.define", "object_type", nil, map[string]any{"key": "items", "singular": "Item", "plural": "Items", "field_schema": map[string]any{"type": "object"}}))
 	object := execute(t, executor, "dev", command("rhz_ext_object", "rhz_ext_object_i", "object.create", "object_instance", nil, map[string]any{"object_type_key": "items", "title": "I-1"}))
@@ -532,7 +511,7 @@ func TestKernelRhizaWorkflowDeadlineAndDomainEvent(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-workflow-deadline-test")
 	defer s.Close()
-	executor := NewStoreExecutor(s)
+	executor := testStoreExecutor(s)
 	executor.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 	execute(t, executor, "dev", command("rhz_wf_type", "rhz_wf_type_i", "object_type.define", "object_type", nil, map[string]any{"key": "cases", "singular": "Case", "plural": "Cases", "field_schema": map[string]any{"type": "object", "state_machine": map[string]any{"initial": "open", "transitions": map[string]any{"open": []any{}}}}}))
 	object := execute(t, executor, "dev", command("rhz_wf_object", "rhz_wf_object_i", "object.create", "object_instance", nil, map[string]any{"object_type_key": "cases", "title": "C-1"}))
@@ -571,39 +550,11 @@ func TestKernelRhizaWorkflowDeadlineAndDomainEvent(t *testing.T) {
 	}
 }
 
-func TestKernelRhizaKnowledgePromotionAndRemoval(t *testing.T) {
-	ctx := context.Background()
-	s := openRhizaKernelStore(t, ctx, "kernel-knowledge-test")
-	defer s.Close()
-	executor := NewStoreExecutor(s)
-	executor.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
-	source := "---\ntype: Ontology Concept\ntitle: Customer\n---\nAn external organization."
-	execute(t, executor, "dev", command("rhz_knowledge_accept", "rhz_knowledge_accept_i", "knowledge.accept", "knowledge_document", nil, map[string]any{"bundle_id": "core", "path": "customer.md", "source_markdown": source}))
-	ontology := map[string]any{"name": "CRM", "concepts": []any{map[string]any{"id": "Customer"}}, "relations": []any{}}
-	proposal := execute(t, executor, "dev", command("rhz_knowledge_propose", "rhz_knowledge_propose_i", "knowledge.propose", "knowledge_proposal", nil, map[string]any{"sources": []any{map[string]any{"bundle_id": "core", "concept_id": "customer"}}, "proposal": ontology}))
-	proposalID := proposal.Aggregate.ID
-	execute(t, executor, "dev", command("rhz_knowledge_review", "rhz_knowledge_review_i", "knowledge.review", "knowledge_proposal", &proposalID, map[string]any{"decision": "accept", "family_id": "crm", "revision": 1}))
-	execute(t, executor, "dev", command("rhz_knowledge_remove", "rhz_knowledge_remove_i", "knowledge.remove", "knowledge_document", nil, map[string]any{"bundle_id": "core", "concept_id": "customer"}))
-	var documents, ontologies, accepted int
-	if err := s.ReadRow(ctx, store.ReadLinearizable, `SELECT COUNT(*) FROM knowledge_documents`).Scan(&documents); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ReadRow(ctx, store.ReadLinearizable, `SELECT COUNT(*) FROM spec_revisions WHERE kind='ontology'`).Scan(&ontologies); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ReadRow(ctx, store.ReadLinearizable, `SELECT COUNT(*) FROM journal_records WHERE stream_id=? AND kind='knowledge.proposal.accepted'`, proposalID).Scan(&accepted); err != nil {
-		t.Fatal(err)
-	}
-	if documents != 0 || ontologies != 1 || accepted != 1 {
-		t.Fatalf("documents=%d ontologies=%d accepted=%d", documents, ontologies, accepted)
-	}
-}
-
 func TestKernelRhizaReactiveRuleLifecycle(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-reactive-rule-test")
 	defer s.Close()
-	executor := NewStoreExecutor(s)
+	executor := testStoreExecutor(s)
 	executor.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 	rule := execute(t, executor, "dev", command("rhz_rule_define", "rhz_rule_define_i", "reactive_rule.define", "reactive_rule", nil, map[string]any{
 		"automation_id": "auto-followup", "rule_key": "note-followup", "name": "Create follow-up", "requested_actor": map[string]any{"type": "automation", "id": "auto-followup"},
@@ -637,7 +588,7 @@ func TestKernelRhizaObjectAndRelationInstanceLifecycle(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-object-relation-instance-test")
 	defer s.Close()
-	executor := NewStoreExecutor(s)
+	executor := testStoreExecutor(s)
 	executor.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 	left := execute(t, executor, "dev", command("rhz_inst_left", "rhz_inst_left_i", "object_type.define", "object_type", nil, map[string]any{"key": "parents", "singular": "Parent", "plural": "Parents", "field_schema": map[string]any{"type": "object", "additionalProperties": true}}))
 	right := execute(t, executor, "dev", command("rhz_inst_right", "rhz_inst_right_i", "object_type.define", "object_type", nil, map[string]any{"key": "children", "singular": "Child", "plural": "Children", "field_schema": map[string]any{"type": "object", "additionalProperties": true}}))
@@ -679,13 +630,11 @@ func openRhizaKernelStore(t *testing.T, ctx context.Context, cluster string) *st
 		t.Fatal(err)
 	}
 	one := int64(1)
-	if err := s.ApplyStatements(ctx, cluster+"-fixture", []rhiza.SQLStatement{
-		{SQL: `INSERT INTO workspaces VALUES('wks_1','one','One',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, ExpectedRowsAffected: &one},
-		{SQL: `INSERT INTO workspace_memberships VALUES('wks_1','dev','owner','2026-01-01T00:00:00Z')`, ExpectedRowsAffected: &one},
-	}); err != nil {
+	if err := s.ApplyStatements(ctx, "workspace-fixture", []rhiza.SQLStatement{{SQL: `INSERT INTO workspaces VALUES('wks_1','one','One',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, ExpectedRowsAffected: &one}}); err != nil {
 		s.Close()
 		t.Fatal(err)
 	}
+
 	return s
 }
 

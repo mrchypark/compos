@@ -15,7 +15,7 @@ Every business mutation in Compos is a Kernel command.
   },
   "command_type": "registered wire name; see command-registry.md or the runtime registry endpoint",
   "target": {
-    "aggregate_type": "registered aggregate type, including knowledge_document",
+    "aggregate_type": "registered aggregate type",
     "aggregate_id": "..."
   },
   "preconditions": [

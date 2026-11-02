@@ -29,21 +29,18 @@ func TestWorkflowCompletionCannotCrossTerminalWork(t *testing.T) {
 			now := "2026-01-01T00:00:00Z"
 			if rhizaStore {
 				one := int64(1)
-				err = s.ApplyStatements(ctx, "fixture", []rhiza.SQLStatement{{SQL: `INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, Args: []any{now, now}, ExpectedRowsAffected: &one}, {SQL: `INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, Args: []any{now}, ExpectedRowsAffected: &one}})
+				err = s.ApplyStatements(ctx, "fixture", []rhiza.SQLStatement{{SQL: `INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, Args: []any{now, now}, ExpectedRowsAffected: &one}})
 			} else {
 				_, err = s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now)
-				if err == nil {
-					_, err = s.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now)
-				}
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			var e *Executor
 			if rhizaStore {
-				e = NewStoreExecutor(s)
+				e = testStoreExecutor(s)
 			} else {
-				e = NewExecutor(s.DB())
+				e = testExecutor(s.DB())
 			}
 			e.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 			exec := func(id, typ, aggregate string, target *string, payload any, source string) Receipt {

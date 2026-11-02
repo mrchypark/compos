@@ -25,8 +25,7 @@ Read in this order:
 
 Implementation sequencing is tracked in the
 [Constitutional Architecture Implementation Plan](../plans/constitutional-architecture-implementation.md).
-Knowledge Space, Ontology grounding and the embedded Rhiza graph projection follow
-the [Knowledge Space and Ontology Implementation Plan](../plans/knowledge-ontology-implementation.md).
+Knowledge content and lifecycle are externally owned. Generic Ontology specs remain supported.
 
 Current findings and verification gates are tracked in the
 [implementation issue ledger](../plans/implementation-issues-20260905.md).

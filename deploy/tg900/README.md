@@ -101,10 +101,17 @@ Object search documents use an `obj_`-prefixed SHA-256 ID derived from workspace
 and canonical object ID, because valid Compos IDs can contain `/`. The original
 ID remains in `object_id`; the Compos search API returns it in `hits[].id`.
 Snapshot, create/update, state patch, and deletion use the same mapping.
-Knowledge search documents use a `knw_`-prefixed SHA-256 ID derived from workspace
-and canonical Knowledge ID, because Meilisearch rejects IDs such as `core:search`.
-The original ID remains in `knowledge_id`; `bundle_id` and `concept_id` are also
-preserved. Snapshot, event updates, and deletion use the same mapping.
+Knowledge is externally owned. Restart the search-syncer after upgrading: its
+object-only snapshot rebuild clears legacy documents for the active workspace.
+The API independently removes hits without a valid `object_id`; no index settings
+update or syncer restart is required for search availability. It reports
+`returnedHits` for the filtered page and omits engine totals and facets, which can
+include legacy documents. Pages can be short or empty until rebuilding clears
+those documents; offsets still refer to engine results.
+Opening a v3 Compos database drops the three dedicated
+Knowledge tables and their contents and advances schema identity to v4, preserving
+shared specs and history. Stop old writers before upgrading; this is not a
+mixed-version writer rollout.
 
 Only the active workspace is cleared during snapshot rebuilding. Documents from
 a previously reset workspace may remain in the index but are excluded by Compos's

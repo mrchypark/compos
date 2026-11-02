@@ -55,7 +55,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	}
 	attributes := body.Attributes
 	includeObjectID := len(attributes) == 0 || slices.Contains(attributes, "*") || slices.Contains(attributes, "object_id")
-	if !includeObjectID && slices.Contains(attributes, "id") {
+	if !includeObjectID {
 		attributes = append(slices.Clone(attributes), "object_id")
 	}
 	payload, _ := json.Marshal(map[string]any{
@@ -88,17 +88,27 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	}
 	// Projection IDs are engine-safe; the API keeps canonical object IDs.
 	hits, _ := result["hits"].([]any)
+	objects := make([]any, 0, len(hits))
 	for _, value := range hits {
 		hit, _ := value.(map[string]any)
-		if objectID, ok := hit["object_id"].(string); ok && objectID != "" {
-			if _, hasID := hit["id"]; hasID {
-				hit["id"] = objectID
-			}
-			if !includeObjectID {
-				delete(hit, "object_id")
-			}
+		objectID, ok := hit["object_id"].(string)
+		if !ok || strings.TrimSpace(objectID) == "" {
+			continue
 		}
+		if _, hasID := hit["id"]; hasID {
+			hit["id"] = objectID
+		}
+		if !includeObjectID {
+			delete(hit, "object_id")
+		}
+		objects = append(objects, hit)
 	}
+	result["hits"] = objects
+	// Engine totals and facets can include legacy documents outside this page.
+	for _, key := range []string{"estimatedTotalHits", "totalHits", "totalPages", "facetDistribution", "facetStats", "semanticHitCount"} {
+		delete(result, key)
+	}
+	result["returnedHits"] = len(objects)
 	write(w, 200, map[string]any{"data": result})
 }
 

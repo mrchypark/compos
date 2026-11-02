@@ -34,7 +34,7 @@ func TestLedgerListFiltersMetadataAndDoesNotWrite(t *testing.T) {
 	appendAttempt("attempt_other", "wks_2", base.Add(3*time.Second))
 	before := len(journal.Events())
 	var output bytes.Buffer
-	if err := runWithDeps([]string{"ledger", "list", "--workspace", "wks_1", "--limit", "10"}, journal, runtimeDeps{stdout: &output, stderr: io.Discard}); err != nil {
+	if err := runWithTestDeps([]string{"ledger", "list", "--workspace", "wks_1", "--limit", "10"}, journal, runtimeDeps{stdout: &output, stderr: io.Discard}); err != nil {
 		t.Fatalf("ledger list: %v", err)
 	}
 	if len(journal.Events()) != before {
@@ -53,13 +53,13 @@ func TestLedgerListFiltersMetadataAndDoesNotWrite(t *testing.T) {
 		t.Fatalf("attempts=%#v", result.Attempts)
 	}
 	output.Reset()
-	if err := runWithDeps([]string{"ledger", "list", "--status", "unknown", "--limit", "1"}, journal, runtimeDeps{stdout: &output, stderr: io.Discard}); err != nil {
+	if err := runWithTestDeps([]string{"ledger", "list", "--status", "unknown", "--limit", "1"}, journal, runtimeDeps{stdout: &output, stderr: io.Discard}); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil || len(result.Attempts) != 1 || result.Attempts[0].AttemptID != "attempt_unknown" {
 		t.Fatalf("filtered attempts=%#v err=%v", result.Attempts, err)
 	}
-	if err := runWithDeps([]string{"ledger", "list", "--limit", "0"}, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard}); err == nil {
+	if err := runWithTestDeps([]string{"ledger", "list", "--limit", "0"}, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard}); err == nil {
 		t.Fatal("non-positive list limit should fail")
 	}
 }
@@ -70,7 +70,7 @@ func TestLedgerListMarksUnpinnedAttemptNotRetryable(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := runWithDeps([]string{"ledger", "list"}, journal, runtimeDeps{stdout: &output, stderr: io.Discard}); err != nil {
+	if err := runWithTestDeps([]string{"ledger", "list"}, journal, runtimeDeps{stdout: &output, stderr: io.Discard}); err != nil {
 		t.Fatal(err)
 	}
 	var result struct {
@@ -97,7 +97,7 @@ func TestLedgerListCommittedIsAbsorbingAfterLateFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := runWithDeps([]string{"ledger", "list"}, journal, runtimeDeps{stdout: &output, stderr: io.Discard}); err != nil {
+	if err := runWithTestDeps([]string{"ledger", "list"}, journal, runtimeDeps{stdout: &output, stderr: io.Discard}); err != nil {
 		t.Fatal(err)
 	}
 	var result struct {
@@ -121,10 +121,10 @@ func TestLedgerRetryRejectsChangedScopeBeforeHTTP(t *testing.T) {
 	}
 	client := &fakeHTTPClient{status: http.StatusOK, body: `{}`}
 	path := testSessionPath(t, "usr_1")
-	if err := saveSession(runtimeDeps{sessionPath: path}, cliSession{Server: "https://api.example.test/other", WorkspaceID: "wks_1", PrincipalID: "usr_1", Credential: "token"}); err != nil {
+	if err := writeTestIdentity(path, cliSession{Server: "https://api.example.test/other", WorkspaceID: "wks_1", PrincipalID: "usr_1", Credential: "token"}); err != nil {
 		t.Fatal(err)
 	}
-	err := runWithDeps([]string{"ledger", "retry", "--attempt", "attempt_1"}, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client, sessionPath: path})
+	err := runWithTestDeps([]string{"ledger", "retry", "--attempt", "attempt_1"}, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client, identityProvider: testIdentityProvider(path)})
 	if err == nil || !strings.Contains(err.Error(), "does not match the active session") || client.calls != 0 {
 		t.Fatalf("retry err=%v calls=%d", err, client.calls)
 	}
@@ -139,11 +139,11 @@ func TestLedgerRetryAppendedAttemptCommits(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := testSessionPath(t, "usr_1")
-	if err := saveSession(runtimeDeps{sessionPath: path}, cliSession{Server: "https://api.example.test/prefix", WorkspaceID: "wks_1", PrincipalID: "usr_1", Credential: "token"}); err != nil {
+	if err := writeTestIdentity(path, cliSession{Server: "https://api.example.test/prefix", WorkspaceID: "wks_1", PrincipalID: "usr_1", Credential: "token"}); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeHTTPClient{status: http.StatusOK, body: `{"command_id":"cmd_1","outcome":"applied","projection":{"workspace_id":"wks_1","projection_sequence":1}}`}
-	if err := runWithDeps([]string{"ledger", "retry", "--attempt", "attempt_1"}, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client, sessionPath: path, now: func() time.Time { return time.Unix(11, 0).UTC() }, newID: fixedIDGenerator(), sleep: noSleep}); err != nil {
+	if err := runWithTestDeps([]string{"ledger", "retry", "--attempt", "attempt_1"}, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client, identityProvider: testIdentityProvider(path), now: func() time.Time { return time.Unix(11, 0).UTC() }, newID: fixedIDGenerator(), sleep: noSleep}); err != nil {
 		t.Fatalf("retry appended attempt: %v", err)
 	}
 	records, err := journal.EventRecords(context.Background(), ledger.EventFilter{})
@@ -179,11 +179,11 @@ func TestLedgerRetryScopePinsBlockHTTP(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := testSessionPath(t, tc.sessionPrincipal)
-			if err := saveSession(runtimeDeps{sessionPath: path}, cliSession{Server: "https://api.example.test", WorkspaceID: tc.sessionWorkspace, PrincipalID: tc.sessionPrincipal, Credential: "token"}); err != nil {
+			if err := writeTestIdentity(path, cliSession{Server: "https://api.example.test", WorkspaceID: tc.sessionWorkspace, PrincipalID: tc.sessionPrincipal, Credential: "token"}); err != nil {
 				t.Fatal(err)
 			}
 			client := &fakeHTTPClient{status: http.StatusOK, body: `{}`}
-			err := runWithDeps([]string{"ledger", "retry", "--attempt", "attempt_1"}, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client, sessionPath: path})
+			err := runWithTestDeps([]string{"ledger", "retry", "--attempt", "attempt_1"}, journal, runtimeDeps{stdout: io.Discard, stderr: io.Discard, client: client, identityProvider: testIdentityProvider(path)})
 			if err == nil || client.calls != 0 {
 				t.Fatalf("retry err=%v calls=%d", err, client.calls)
 			}

@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,7 +14,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -48,79 +46,8 @@ func defaultDataPath(filename, fallback string) string {
 	return filepath.Join(home, ".local", "share", "compos", filename)
 }
 
-func sessionPath(deps runtimeDeps) string {
-	if deps.sessionPath != "" {
-		return deps.sessionPath
-	}
-	if value := strings.TrimSpace(os.Getenv("COMPOS_SESSION_PATH")); value != "" {
-		return value
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return filepath.Join(".compos", "auth.json")
-	}
-	return filepath.Join(home, ".compos", "auth.json")
-}
-
-func saveSession(deps runtimeDeps, session cliSession) error {
-	if session.Server == "" {
-		return fmt.Errorf("session server is required")
-	}
-	if session.WorkspaceID == "" {
-		return fmt.Errorf("session workspace is required")
-	}
-	if session.PrincipalID == "" {
-		return fmt.Errorf("session principal is required")
-	}
-	body, err := json.MarshalIndent(session, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := sessionPath(deps)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return atomicWriteFile(path, append(body, '\n'), 0o600)
-}
-
-func loadSession(deps runtimeDeps) (cliSession, error) {
-	body, err := os.ReadFile(sessionPath(deps))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return cliSession{}, fmt.Errorf("not logged in; run compos login")
-		}
-		return cliSession{}, err
-	}
-	var session cliSession
-	if err := json.Unmarshal(body, &session); err != nil {
-		return cliSession{}, fmt.Errorf("session file is invalid: %w", err)
-	}
-	if session.Server == "" || session.WorkspaceID == "" || session.PrincipalID == "" {
-		return cliSession{}, fmt.Errorf("session file is incomplete; run compos login")
-	}
-	session.Server = trimSlash(session.Server)
-	return session, nil
-}
-
-func sessionForCommand(deps runtimeDeps, serverOverride, workspaceOverride string) (cliSession, error) {
-	session, err := loadSession(deps)
-	if err != nil {
-		if strings.TrimSpace(serverOverride) == "" {
-			return cliSession{}, err
-		}
-		return cliSession{Server: trimSlash(serverOverride), WorkspaceID: workspaceOverride, PrincipalID: "dev"}, nil
-	}
-	if serverOverride != "" {
-		session.Server = trimSlash(serverOverride)
-	}
-	if workspaceOverride != "" {
-		session.WorkspaceID = workspaceOverride
-	}
-	return session, nil
-}
-
 func removedTokenFlagError() error {
-	return fmt.Errorf("--token has been removed; run compos login")
+	return fmt.Errorf("--token has been removed; use the external identity integration")
 }
 
 func hasRemovedTokenFlag(args []string) bool {
@@ -211,69 +138,6 @@ func truncateBodyForMessage(body []byte, limit int) string {
 		cut--
 	}
 	return string(trimmed[:cut]) + "...(truncated)"
-}
-
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	cleanup := true
-	closed := false
-	closeTemp := func() error {
-		if closed {
-			return nil
-		}
-		closed = true
-		return tmp.Close()
-	}
-	defer func() {
-		if cleanup {
-			_ = closeTemp()
-			_ = os.Remove(tmpPath)
-		}
-	}()
-
-	if err := tmp.Chmod(perm); err != nil {
-		_ = closeTemp()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = closeTemp()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = closeTemp()
-		return err
-	}
-	if err := closeTemp(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
-	}
-	cleanup = false
-	return syncDir(dir)
-}
-
-func syncDir(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	dir, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	if err := dir.Sync(); err != nil {
-		if (runtime.GOOS == "darwin" || runtime.GOOS == "freebsd") && errors.Is(err, syscall.EINVAL) {
-			return nil
-		}
-		return err
-	}
-	return nil
 }
 
 func shutdownHTTPServer(server *http.Server) {

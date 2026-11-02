@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	SchemaIdentity = "compos-go-sqlite-world-spec-journal-reactive-agent-v3"
+	SchemaIdentity = "compos-go-sqlite-external-authority-v5"
 )
 
 //go:embed schema.sql

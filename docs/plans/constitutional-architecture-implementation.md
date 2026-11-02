@@ -8,14 +8,14 @@ Implemented in the first Go/SQLite slice:
   immutability constraints
 - Task, Function, Workflow, AgentDefinition, Domain Event and Ontology spec validation
 - `spec.publish`, `work.open`, `work.route`, `work.submit`, `function.invoke`,
-  `event.emit`, `knowledge.propose` and human-only `knowledge.review`
+  `event.emit` and generic Ontology spec publication
 - allowlisted `object.move` Function binding and atomic completion facts
 - native, connector and composite Function bindings
 - Journal-replayed Workflow coordination with `route`, `invoke`,
   deterministic branch, parallel fan-out/join and step mappings
 - Human inbox/submission, deadline facts, ReactiveRule SLA reactions, final
   Function failure policy, and Agent result submission
-- Knowledge proposal → human review → immutable Ontology revision promotion
+- External Knowledge ownership; immutable Ontology revisions through `spec.publish`
 - `GET /api/v1/workspaces/{workspace_id}/work/{stream_id}` projection
 - authorization, idempotency, immutable history and end-to-end tests
 
@@ -273,15 +273,9 @@ ReactiveRule → allowlisted Kernel command → Journal
 Domain Event와 Ontology는 immutable spec revision으로 구현되었다. `event.emit`은
 Event revision의 payload schema를 검증해 pinned event fact를 기록한다. Function의
 `emits`는 Event revision 존재를 검증하고, 성공 output 전체를 payload로 검증해 같은
-transaction에서 자동 발행한다. Knowledge feedback은
-accepted OKF Concept을 근거로 proposal을 남기고 human review acceptance가 Ontology
-revision을 같은 transaction에서 생성한다. 성능 측정 전에는 generated
-DDL, dedicated domain table이나 materialized projection을 만들지 않는다.
-
-Knowledge Space와 Ontology grounding은 이제 concrete consumer가 있으므로 별도
-[Knowledge Space and Ontology Implementation Plan](knowledge-ontology-implementation.md)의
-순서를 따른다. canonical SQL model을 먼저 완성하고 Rhiza Graph는 검증을 통과한
-read projection으로만 추가한다. SQLite는 local/test support mode다.
+transaction에서 자동 발행한다. Knowledge content and lifecycle are externally
+owned. Compos retains generic Ontology specs and Task ontology context.
+No dedicated Knowledge store, review lifecycle, or graph projection runs.
 
 ## 8. 명시적으로 만들지 않는 것
 

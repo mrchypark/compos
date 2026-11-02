@@ -11,8 +11,12 @@ COPY internal ./internal
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -ldflags="-s -w" -o /out/compos-server ./cmd/server \
-    && go build -trimpath -ldflags="-s -w" -o /out/compos-storage-import ./cmd/storage-import \
+    go build -trimpath -ldflags="-s -w" -o /out/compos-server ./cmd/server
+
+FROM go-build AS go-tools
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -ldflags="-s -w" -o /out/compos-storage-import ./cmd/storage-import \
     && go build -trimpath -ldflags="-s -w" -o /out/compos ./cmd/compos \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/compos-search-syncer ./cmd/search-syncer
 
@@ -60,7 +64,7 @@ CMD ["compos-server"]
 
 # Offline logical migration only; this image does not start an API or scheduler.
 FROM server AS storage-import
-COPY --from=go-build /out/compos-storage-import /usr/local/bin/compos-storage-import
+COPY --from=go-tools /out/compos-storage-import /usr/local/bin/compos-storage-import
 HEALTHCHECK NONE
 CMD ["compos-storage-import"]
 
@@ -72,7 +76,7 @@ RUN apt-get update \
     && groupadd --system --gid 10001 compos \
     && useradd --system --uid 10001 --gid compos --home-dir /home/compos --create-home --shell /usr/sbin/nologin compos
 
-COPY --from=go-build /out/compos /usr/local/bin/compos
+COPY --from=go-tools /out/compos /usr/local/bin/compos
 
 USER compos
 WORKDIR /work
@@ -98,6 +102,6 @@ ENTRYPOINT ["compos-operator"]
 
 FROM gcr.io/distroless/static-debian13:nonroot AS search-syncer
 
-COPY --from=go-build /out/compos-search-syncer /usr/local/bin/compos-search-syncer
+COPY --from=go-tools /out/compos-search-syncer /usr/local/bin/compos-search-syncer
 
 ENTRYPOINT ["/usr/local/bin/compos-search-syncer"]

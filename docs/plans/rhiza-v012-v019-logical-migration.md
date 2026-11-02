@@ -136,3 +136,5 @@ Executed on tg900 (`gke_tg900-cluster`, namespace `compos-conductor`) on
   and original Deployment backups were retained.
 
 Single-node GCS recovery does not prove multi-node HA or mixed-version support.
+
+Historical note: Knowledge projection behavior above predates removal of the feature. Knowledge is now externally owned. The v3-to-v4 schema migration drops the three dedicated Knowledge tables; shared specs and history remain.

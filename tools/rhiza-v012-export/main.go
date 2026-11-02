@@ -198,7 +198,7 @@ func exportAttempt(ctx context.Context, replica *rhiza.ReadReplica, conf config,
 	firstTable := true
 	for _, entry := range catalog {
 		if shouldSkip(entry.name) {
-			if entry.name == "schema_metadata" || entry.name == "object_type_templates" {
+			if !strings.HasPrefix(entry.name, "_rhiza_") && !strings.HasPrefix(entry.name, "sqlite_") {
 				count, err := state.count(ctx, entry.name)
 				if err != nil {
 					return summary{}, err
@@ -474,7 +474,12 @@ func writeJSON(w io.Writer, value any) error {
 }
 
 func shouldSkip(name string) bool {
-	return name == "schema_metadata" || name == "object_type_templates" || strings.HasPrefix(name, "_rhiza_") || strings.HasPrefix(name, "sqlite_")
+	switch name {
+	case "schema_metadata", "object_type_templates", "knowledge_documents", "knowledge_relations", "ontology_groundings",
+		"workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities", "principal_person_bindings", "person_binding_claims":
+		return true
+	}
+	return strings.HasPrefix(name, "_rhiza_") || strings.HasPrefix(name, "sqlite_")
 }
 
 func isVirtualTable(sql string) bool {

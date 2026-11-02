@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -47,9 +48,7 @@ func TestConductorOutboxDeliveryPublishesOnlyExecutionRequests(t *testing.T) {
 	if _, err := db.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-		t.Fatal(err)
-	}
+
 	hash := "sha256:" + strings.Repeat("0", 64)
 	for _, commandID := range []string{"cmd_external", "cmd_generic"} {
 		if _, err := db.DB().Exec(`INSERT INTO command_ledger VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, commandID, "wks_1", "dev", "null", `{"type":"user","id":"dev"}`, hash, commandID, "function.invoke", `{"aggregate_type":"work_stream","aggregate_id":"wrk_1"}`, `[]`, `{"source":"api","attempt_id":null,"event_id":null}`, hash, `{}`, "applied", `{"command_id":"`+commandID+`","outcome":"applied"}`, now, now); err != nil {
@@ -64,7 +63,7 @@ func TestConductorOutboxDeliveryPublishesOnlyExecutionRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := New(db)
+	server := newTestServer(db)
 	if err := server.EnableConductor(conductor.URL, "secret", "callback-secret"); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +185,7 @@ func TestConductorOutboxRequiresMatchingAcknowledgements(t *testing.T) {
 			if _, err := db.DB().Exec(`INSERT INTO outbox_events VALUES('evt_1','wks_1','cmd_1','connector.invoke','{"_compos":{"execution_request_id":"inv_1"}}','pending',?,?)`, now, now); err != nil {
 				t.Fatal(err)
 			}
-			server := New(db)
+			server := newTestServer(db)
 			defer server.Close()
 			server.conductorURL, server.conductorClient = conductor.URL, conductor.Client()
 			if err := server.dispatchConductorOutbox(ctx); err == nil {
@@ -305,7 +304,7 @@ func TestRhizaConductorOutboxDispatchIsBoundedAndDrains(t *testing.T) {
 	}))
 	defer conductor.Close()
 
-	server := New(db)
+	server := newTestServer(db)
 	defer server.Close()
 	server.conductorURL = conductor.URL
 	server.conductorClient = conductor.Client()
@@ -352,9 +351,7 @@ func TestConductorCallbackIsAuthenticatedWorkspaceScopedAndIdempotent(t *testing
 	if _, err := db.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-		t.Fatal(err)
-	}
+
 	if _, err := db.DB().Exec(`INSERT INTO command_ledger VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "cmd_invoke", "wks_1", "dev", "null", `{"type":"user","id":"dev"}`, hash, "idem_invoke", "function.invoke", `{"aggregate_type":"work_stream","aggregate_id":"wrk_1"}`, `[]`, `{"source":"api","attempt_id":null,"event_id":null}`, hash, `{}`, "applied", `{"command_id":"cmd_invoke","outcome":"applied"}`, now, now); err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +378,7 @@ func TestConductorCallbackIsAuthenticatedWorkspaceScopedAndIdempotent(t *testing
 
 	outbound := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
 	defer outbound.Close()
-	server := New(db)
+	server := newTestServer(db)
 	if err := server.EnableConductor(outbound.URL, "service-secret", "callback-secret"); err != nil {
 		t.Fatal(err)
 	}
@@ -504,11 +501,11 @@ func TestRhizaConductorCallbackRejectsChangedReducedCallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	now := "2026-01-01T00:00:00Z"
 	one := int64(1)
-	now, hash := "2026-01-01T00:00:00Z", "sha256:"+strings.Repeat("0", 64)
+	hash := "sha256:" + strings.Repeat("0", 64)
 	if err := db.ApplyStatements(ctx, "conductor-callback-fixture", []rhiza.SQLStatement{
 		{SQL: `INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, Args: []any{now, now}, ExpectedRowsAffected: &one},
-		{SQL: `INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, Args: []any{now}, ExpectedRowsAffected: &one},
 		{SQL: `INSERT INTO command_ledger VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, Args: []any{"cmd_invoke", "wks_1", "dev", "null", `{"type":"user","id":"dev"}`, hash, "idem_invoke", "function.invoke", `{"aggregate_type":"work_stream","aggregate_id":"wrk_1"}`, `[]`, `{"source":"api","attempt_id":null,"event_id":null}`, hash, `{}`, "applied", `{"command_id":"cmd_invoke","outcome":"applied"}`, now, now}, ExpectedRowsAffected: &one},
 		{SQL: `INSERT INTO spec_revisions VALUES('spc_function','wks_1','test.function',1,'function','{}',?,?, 'dev')`, Args: []any{hash, now}, ExpectedRowsAffected: &one},
 		{SQL: `INSERT INTO journal_records(id,workspace_id,stream_id,stream_sequence,kind,spec_revision_id,participant_kind,participant_id,principal_id,correlation_id,command_id,payload_json,created_at) VALUES('jnl_1','wks_1','wrk_1',1,'function.requested','spc_function','human','dev','dev','inv_1','cmd_invoke','{"binding_kind":"native","handler_key":"native.invoke","handler_version":"1"}',?)`, Args: []any{now}, ExpectedRowsAffected: &one},
@@ -516,7 +513,8 @@ func TestRhizaConductorCallbackRejectsChangedReducedCallback(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	server := New(db)
+
+	server := newTestServer(db)
 	defer server.Close()
 	server.conductorCallbackToken = "callback-secret"
 	callback := map[string]any{
@@ -532,7 +530,41 @@ func TestRhizaConductorCallbackRejectsChangedReducedCallback(t *testing.T) {
 		server.ServeHTTP(response, req)
 		return response
 	}
-	if response := call(callback); response.Code != http.StatusAccepted {
+	savedAuthorizer := server.kernel.AuthorizeCommand
+	server.kernel.AuthorizeCommand = func(context.Context, string, kernel.Command) (kernel.Actor, error) {
+		return kernel.Actor{}, kernel.ErrAuthorizationDenied
+	}
+	deniedCallback := make(map[string]any, len(callback))
+	for key, value := range callback {
+		deniedCallback[key] = value
+	}
+	deniedCallback["callback_id"] = "cb_explicitly_denied"
+	if response := call(deniedCallback); response.Code != http.StatusForbidden {
+		t.Fatalf("explicit denial status=%d body=%s", response.Code, response.Body.String())
+	}
+	var deniedStatus string
+	if err := db.ReadRow(ctx, store.ReadLinearizable, `SELECT status FROM adapter_inbound_events WHERE inbound_event_id='cb_explicitly_denied'`).Scan(&deniedStatus); err != nil || deniedStatus != "rejected" {
+		t.Fatalf("explicit denial status=%s err=%v", deniedStatus, err)
+	}
+	server.kernel.AuthorizeCommand = func(context.Context, string, kernel.Command) (kernel.Actor, error) {
+		return kernel.Actor{}, context.DeadlineExceeded
+	}
+	if response := call(callback); response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"retryable":true`) {
+		t.Fatalf("authority outage status=%d body=%s", response.Code, response.Body.String())
+	}
+	var pendingStatus string
+	if err := db.ReadRow(ctx, store.ReadLinearizable, `SELECT status FROM adapter_inbound_events WHERE inbound_event_id='cb_exec_1'`).Scan(&pendingStatus); err != nil || pendingStatus != "appended" {
+		t.Fatalf("outage callback status=%s err=%v", pendingStatus, err)
+	}
+	var pendingErr *kernel.CommandError
+	if err := server.reducePendingConductorCallbacks(ctx); !errors.As(err, &pendingErr) || !pendingErr.Retryable {
+		t.Fatalf("pending recovery error=%v", err)
+	}
+	if err := db.ReadRow(ctx, store.ReadLinearizable, `SELECT status FROM adapter_inbound_events WHERE inbound_event_id='cb_exec_1'`).Scan(&pendingStatus); err != nil || pendingStatus != "appended" {
+		t.Fatalf("recovery outage status=%s err=%v", pendingStatus, err)
+	}
+	server.kernel.AuthorizeCommand = savedAuthorizer
+	if response := call(callback); response.Code != http.StatusOK {
 		t.Fatalf("callback status=%d body=%s", response.Code, response.Body.String())
 	}
 	reordered := make(map[string]any, len(callback))
@@ -656,10 +688,8 @@ func TestConductorComposConnectorReadsAreAuthenticatedAndWorkspaceScoped(t *test
 	if _, err := db.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-		t.Fatal(err)
-	}
-	server := New(db)
+
+	server := newTestServer(db)
 	typeReceipt, err := server.kernel.Execute(ctx, "dev", connectorCommand("cmd_type", "object_type.define", "object_type", map[string]any{
 		"key": "orders", "singular": "Order", "plural": "Orders", "field_schema": map[string]any{"type": "object"},
 	}))

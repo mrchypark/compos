@@ -22,9 +22,8 @@ func (e *Executor) executeRhiza(ctx context.Context, principal string, c Command
 		"relation_definition.define": true, "object_type.delete": true, "relation_definition.delete": true,
 		"reactive_rule.define": true, "reactive_rule.publish_revision": true, "reactive_rule.disable": true,
 		"reactive_rule.retire": true, "reactive_rule.delete": true, "object.delete": true,
-		"event.emit": true, "knowledge.propose": true, "knowledge.review": true,
-		"knowledge.accept": true, "knowledge.remove": true,
-		"work.open": true, "work.route": true, "work.submit": true,
+		"event.emit": true,
+		"work.open":  true, "work.route": true, "work.submit": true,
 		"work.cancel": true, "work.record_deadline": true,
 		"object.create": true, "object.update": true, "object.move": true,
 		"relation.link": true, "relation.unlink": true,
@@ -65,14 +64,6 @@ func (e *Executor) executeRhiza(ctx context.Context, principal string, c Command
 		return e.archiveSimpleRhiza(ctx, principal, actor, c, guards, "object_instances", "object_instance", "object.deleted")
 	case "event.emit":
 		return e.emitDomainEventRhiza(ctx, principal, actor, c, payload, guards)
-	case "knowledge.propose":
-		return e.proposeKnowledgeRhiza(ctx, principal, actor, c, payload, guards)
-	case "knowledge.review":
-		return e.reviewKnowledgeRhiza(ctx, principal, actor, c, payload, guards)
-	case "knowledge.accept":
-		return e.acceptKnowledgeRhiza(ctx, principal, actor, c, payload, guards)
-	case "knowledge.remove":
-		return e.removeKnowledgeRhiza(ctx, principal, actor, c, payload, guards)
 	case "work.open":
 		return e.openWorkRhiza(ctx, principal, actor, c, payload, guards)
 	case "work.route":
@@ -259,68 +250,15 @@ func (e *Executor) archiveSimpleRhiza(ctx context.Context, principal string, act
 func (e *Executor) prepareRhiza(ctx context.Context, principal string, c Command, payload map[string]any) (Actor, []rhiza.SQLStatement, error) {
 	zero, one := int64(0), int64(1)
 	statements := []rhiza.SQLStatement{{SQL: `SELECT command_id FROM command_ledger WHERE workspace_id=? AND authenticated_principal_id=? AND idempotency_key=?`, Args: []any{c.WorkspaceID, principal, c.IdempotencyKey}, WantRows: true, ExpectedReturnedRows: &zero}}
-	var member int
-	if err := e.store.ReadRow(ctx, store.ReadLinearizable, `SELECT 1 FROM workspace_memberships WHERE workspace_id=? AND principal_id=?`, c.WorkspaceID, principal).Scan(&member); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Actor{}, nil, reject("forbidden", "workspace membership is required")
-		}
+	actor, err := authorize(ctx, nil, principal, c)
+	if err != nil {
 		return Actor{}, nil, err
 	}
-	statements = append(statements, rhiza.SQLStatement{SQL: `SELECT 1 FROM workspace_memberships WHERE workspace_id=? AND principal_id=?`, Args: []any{c.WorkspaceID, principal}, WantRows: true, ExpectedReturnedRows: &one})
-	if reactiveRuleLifecycleCommand(c.CommandType) {
-		var creator string
-		if err := e.store.ReadRow(ctx, store.ReadLinearizable, `SELECT created_by_principal_id FROM reactive_rules WHERE workspace_id=? AND id=? AND archived_at IS NULL`, c.WorkspaceID, *c.Target.AggregateID).Scan(&creator); err != nil {
-			return Actor{}, nil, reject("precondition_failed", "ReactiveRule does not exist")
-		}
-		if creator != principal {
-			return Actor{}, nil, reject("forbidden", "ReactiveRule lifecycle commands require the creator principal")
-		}
-		statements = append(statements, rhiza.SQLStatement{SQL: `SELECT 1 FROM reactive_rules WHERE workspace_id=? AND id=? AND archived_at IS NULL AND created_by_principal_id=?`, Args: []any{c.WorkspaceID, *c.Target.AggregateID, principal}, WantRows: true, ExpectedReturnedRows: &one})
+	var exists int
+	if err := e.store.ReadRow(ctx, store.ReadLinearizable, `SELECT 1 FROM workspaces WHERE id=?`, c.WorkspaceID).Scan(&exists); err != nil {
+		return Actor{}, nil, reject("precondition_failed", "workspace does not exist")
 	}
-
-	actor := Actor{Type: "user", ID: principal}
-	if c.RequestedActor != nil {
-		actor = *c.RequestedActor
-		if actor.ID == "" {
-			return Actor{}, nil, reject("forbidden", "requested actor id is required")
-		}
-		if actor.Type == "user" {
-			if actor.ID != principal {
-				return Actor{}, nil, reject("forbidden", "user actor must match the authenticated principal")
-			}
-		} else {
-			if actor.Type != "service" && actor.Type != "automation" {
-				return Actor{}, nil, reject("forbidden", "requested actor type is invalid")
-			}
-			if actor.Type == "automation" && automationActorDenied(c.CommandType) {
-				return Actor{}, nil, reject("forbidden", "automation actor may not execute this command")
-			}
-			relation, _ := payload["relation_definition_id"].(string)
-			var capabilityID, capabilityRelation, prefix string
-			var max sql.NullInt64
-			err := e.store.ReadRow(ctx, store.ReadLinearizable, `SELECT id,relation_definition_id,idempotency_key_prefix,max_automation_recursion_depth FROM actor_capabilities WHERE workspace_id=? AND principal_id=? AND actor_type=? AND actor_id=? AND command_type=? AND causation_source=? AND relation_definition_id IN ('',?) ORDER BY relation_definition_id DESC LIMIT 1`, c.WorkspaceID, principal, actor.Type, actor.ID, c.CommandType, c.Causation.Source, relation).Scan(&capabilityID, &capabilityRelation, &prefix, &max)
-			if err != nil {
-				return Actor{}, nil, reject("forbidden", "requested actor capability is missing")
-			}
-			if !strings.HasPrefix(c.IdempotencyKey, prefix) {
-				return Actor{}, nil, reject("forbidden", "idempotency key is outside the actor capability")
-			}
-			if actor.Type == "automation" && max.Valid {
-				var automation struct {
-					RecursionDepth int64 `json:"recursion_depth"`
-				}
-				if len(c.Causation.Automation) == 0 || json.Unmarshal(c.Causation.Automation, &automation) != nil || automation.RecursionDepth > max.Int64 {
-					return Actor{}, nil, reject("automation_recursion_limit", "automation recursion limit exceeded")
-				}
-			}
-			var maxValue any
-			if max.Valid {
-				maxValue = max.Int64
-			}
-			statements = append(statements, rhiza.SQLStatement{SQL: `SELECT 1 FROM actor_capabilities WHERE id=? AND workspace_id=? AND principal_id=? AND actor_type=? AND actor_id=? AND command_type=? AND causation_source=? AND relation_definition_id=? AND idempotency_key_prefix=? AND max_automation_recursion_depth IS ?`, Args: []any{capabilityID, c.WorkspaceID, principal, actor.Type, actor.ID, c.CommandType, c.Causation.Source, capabilityRelation, prefix, maxValue}, WantRows: true, ExpectedReturnedRows: &one})
-		}
-	}
-
+	statements = append(statements, rhiza.SQLStatement{SQL: `SELECT 1 FROM workspaces WHERE id=?`, Args: []any{c.WorkspaceID}, WantRows: true, ExpectedReturnedRows: &one})
 	d, _ := definition(c.CommandType)
 	for _, required := range d.RequiredPreconditions {
 		found := false

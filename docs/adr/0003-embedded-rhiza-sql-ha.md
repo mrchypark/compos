@@ -30,9 +30,9 @@ Multi-node clusters require shared object storage and peer tokens.
 
 Rhiza v0.19.0 materializes SQL, Graph, and KV together in one embedded runtime.
 Compos does not start a second Rhiza process or select a build profile. The
-Knowledge reconciler writes its rebuildable ontology projection through
-Rhiza's replicated Graph API and bounded reachability uses Rhiza's native
-adjacency traversal.
+Knowledge reconciler and Concept graph APIs described in the original design
+were subsequently removed when Knowledge ownership moved externally. Existing
+graph data is retained; Compos starts no dedicated graph projection worker.
 
 Direct SQLite backup is disabled in Rhiza mode. Rhiza checkpoints and the
 shared object store own recovery. The S3-backed integration gate starts three

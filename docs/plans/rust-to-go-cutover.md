@@ -28,7 +28,7 @@ For a deployment with existing business data:
    rebuild Meilisearch before enabling search traffic.
 6. Verify health, authentication/session/logout, one Human submission, one
    external Function callback, one Workflow completion, one ReactiveRule
-   action, one Agent result submission, Knowledge search, and Rhiza
+   action, one Agent result submission, object search, and Rhiza
    reachability.
 7. Keep the old runtime read-only until record counts, sampled payloads,
    relations, command receipts, and search results are accepted, then retire it.

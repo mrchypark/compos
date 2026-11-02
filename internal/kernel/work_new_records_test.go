@@ -19,24 +19,25 @@ func TestWorkSubmitChangesNewRecordsSQLite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'); INSERT INTO workspace_memberships VALUES('wks_1','dev','owner','2026-01-01T00:00:00Z')`); err != nil {
+	if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	runWorkSubmitChangesNewRecords(t, NewExecutor(s.DB()), false)
+
+	runWorkSubmitChangesNewRecords(t, testExecutor(s.DB()), false)
 }
 
 func TestWorkSubmitChangesNewRecordsRhiza(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-work-new-records")
 	defer s.Close()
-	runWorkSubmitChangesNewRecords(t, NewStoreExecutor(s), false)
+	runWorkSubmitChangesNewRecords(t, testStoreExecutor(s), false)
 }
 
 func TestWorkSubmitChangesNewRecordsRhizaConcurrent(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-work-new-records-concurrent")
 	defer s.Close()
-	runWorkSubmitChangesNewRecords(t, NewStoreExecutor(s), true)
+	runWorkSubmitChangesNewRecords(t, testStoreExecutor(s), true)
 }
 
 func runWorkSubmitChangesNewRecords(t *testing.T, e *Executor, concurrent bool) {

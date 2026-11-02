@@ -1,5 +1,7 @@
 # tg900 GCS reset and Rhiza v0.12.0 verification
 
+Historical verification record: Knowledge support described here has since been removed; Knowledge is externally owned.
+
 Verified 2026-09-05. User explicitly approved resetting the current Compos
 workspace, stopping the two legacy writers, clearing the existing bucket and
 then upgrading Rhiza. No new bucket, PVC or Cloud Build was used.

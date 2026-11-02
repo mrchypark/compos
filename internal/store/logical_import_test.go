@@ -86,6 +86,17 @@ func TestLogicalImportRejectsInvalidInputBeforeWritesAndVerificationRejectsParti
 		t.Fatalf("invalid import wrote %d workspaces", count)
 	}
 	input.Source.SchemaIdentity = logicalSourceIdentity
+	for _, name := range []string{"knowledge_documents", "knowledge_relations", "ontology_groundings", "workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities", "principal_person_bindings", "person_binding_claims"} {
+		input.Tables = append(input.Tables, LogicalImportTable{Name: name, Columns: []string{"id"}})
+		if err := validateLogicalImport(input); err == nil {
+			t.Fatalf("retired table accepted for import: %s", name)
+		}
+		input.Tables = input.Tables[:len(input.Tables)-1]
+		input.ExcludedTables = append(input.ExcludedTables, LogicalExcludedTable{Name: name, Rows: 1})
+	}
+	if err := validateLogicalImport(input); err != nil {
+		t.Fatalf("declared retired table exclusions rejected: %v", err)
+	}
 	if _, err := VerifyLogicalImport(ctx, target, input, digest); err == nil {
 		t.Fatal("partial target passed verification")
 	}
@@ -121,7 +132,7 @@ func testLogicalImport(t *testing.T, ctx context.Context, target *Store) (*Logic
 	}
 	add("workspaces", map[string]any{"id": "ws", "key": "workspace", "name": "Workspace", "version": int64(1), "created_at": time, "updated_at": time})
 	for index := 0; index < 65; index++ {
-		add("workspace_memberships", map[string]any{"workspace_id": "ws", "principal_id": "member-" + strconv.Itoa(index), "role": "member", "created_at": time})
+		add("workspaces", map[string]any{"id": "extra-" + strconv.Itoa(index), "key": "extra-" + strconv.Itoa(index), "name": "Extra", "version": int64(1), "created_at": time, "updated_at": time})
 	}
 	add("object_types", map[string]any{"id": "type", "workspace_id": "ws", "key": "things", "singular": "Thing", "plural": "Things", "schema_version": int64(2), "field_schema_json": "{}", "relation_schema_json": "{}", "state_machine_id": nil, "archived_at": nil, "version": int64(1), "created_at": time, "updated_at": time, "created_by_principal_id": "owner", "updated_by_principal_id": "owner"})
 	add("object_type_schema_revisions", map[string]any{"workspace_id": "ws", "object_type_id": "type", "schema_version": int64(1), "field_schema_json": "{}", "relation_schema_json": "{}", "state_machine_id": nil, "digest": hash, "created_at": time, "created_by_principal_id": "owner"})

@@ -60,26 +60,10 @@ Human inboxes and work streams are read through
 `GET /api/v1/workspaces/{workspace_id}/work/{stream_id}`. Status and assignee
 are derived from immutable Journal facts rather than updated through CRUD routes.
 
-Accepted Knowledge and Ontology reads are:
-
-```text
-GET /api/v1/workspaces/{workspace_id}/knowledge
-GET /api/v1/workspaces/{workspace_id}/knowledge/{bundle_id}/{concept_id...}
-GET /api/v1/workspaces/{workspace_id}/ontology/traverse
-GET /api/v1/workspaces/{workspace_id}/ontology/reachable-node-ids
-GET /api/v1/workspaces/{workspace_id}/ontology/groundings
-GET /api/v1/workspaces/{workspace_id}/events
-GET /api/v1/workspaces/{workspace_id}/knowledge/proposals
-```
-
-Knowledge source export uses `format=source`. Canonical SQL serves grounding and
-duplicate-preserving path traversal (Rhiza in deployed mode; SQLite locally and
-in tests); Meilisearch serves the
-rebuildable full-text projection. A ready, explicitly
-configured Rhiza Graph projection serves only outgoing unique reachable Concept
-IDs; it never silently falls back to SQLite. Both graph APIs have fixed
-server-side result and expansion budgets; clients cannot increase them.
-Domain Event and Knowledge proposal writes use Kernel commands rather than CRUD.
+Domain Event reads use `GET /api/v1/workspaces/{workspace_id}/events` and writes
+use `event.emit`. Knowledge is externally owned; its former read and command
+endpoints, including Concept traversal and grounding, have been removed.
+Ontology revisions remain available through generic spec publication and reads.
 
 ## Import API
 

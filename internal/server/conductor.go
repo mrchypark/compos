@@ -182,7 +182,9 @@ func (s *Server) reduceConductorCallback(w http.ResponseWriter, r *http.Request,
 		}
 		var commandErr *kernel.CommandError
 		if errors.As(err, &commandErr) {
-			_ = s.rejectConductorCallback(r.Context(), callback)
+			if !commandErr.Retryable {
+				_ = s.rejectConductorCallback(r.Context(), callback)
+			}
 			commandError(w, err)
 		} else {
 			dbError(w, err)
@@ -430,7 +432,7 @@ func (s *Server) reducePendingConductorCallbacks(ctx context.Context) error {
 		}
 		if _, err := s.reduceConductorCallbackCore(ctx, callback, streamID, principalID, requestKind); err != nil {
 			var commandErr *kernel.CommandError
-			if errors.As(err, &commandErr) {
+			if errors.As(err, &commandErr) && !commandErr.Retryable {
 				if err := s.rejectConductorCallback(ctx, callback); err != nil {
 					return err
 				}

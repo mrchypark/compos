@@ -44,7 +44,7 @@ Knowledge
 ## 2. 개념 공간과 canonical model
 
 ```text
-Knowledge Space
+External Knowledge Space (owned outside Compos)
     Note / Document / Claim / Source / Evidence / Proposal
 
 Semantic World
@@ -102,24 +102,12 @@ Current Work View = World + pinned Spec revisions + Journal facts
 projection이다. 독립적인 consistency identity가 실제로 필요하다는 증거가 생길
 때만 materialize한다.
 
-## 3. Knowledge Space
+## 3. External Knowledge ownership
 
-Knowledge Space는 조직의 비정형 지식이 점진적으로 구조화되는 Semantic
-Knowledge Layer다. Note, Document, Source, Term, Claim, Evidence와 Concept
-Proposal을 보존한다.
-
-LLM은 문서에서 Concept과 Relation을 제안할 수 있지만 Ontology를 독단적으로
-확정하지 않는다.
-
-```text
-Unstructured Knowledge
-        ↓ semantic extraction
-Concept / Relation Proposal
-        ↓ human review
-Ontology
-```
-
-운영 데이터와 실행 증거도 새로운 지식과 의미 구조를 제안하는 입력이 된다.
+Knowledge content, extraction, proposals, review and lifecycle belong to an
+external system. Compos consumes meaning through immutable Ontology specs and
+Task ontology context; it does not implement a Knowledge Space or its graph.
+Operational execution evidence remains in the Compos Journal.
 
 ## 4. Ontology와 Operational World
 

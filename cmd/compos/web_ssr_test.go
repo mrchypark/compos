@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -110,7 +111,7 @@ func TestWebSSRNativeFormsRoundTripEscapedObjectPaths(t *testing.T) {
 	defer backend.Close()
 
 	deps := runtimeDeps{
-		client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(),
+		identityProvider: testIdentityProvider(os.Getenv("COMPOS_SESSION_PATH")), client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(),
 		stdout: io.Discard, stderr: io.Discard,
 	}
 	app := webSSR{deps: deps, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
@@ -260,7 +261,7 @@ func TestWebSSRUpdateRejectsRequestedObjectIDMismatchBeforeCommand(t *testing.T)
 		_, _ = io.WriteString(w, `{"data":{"id":"obj_other","title":"Other","object_type_key":"tasks","version":1,"values":{}}}`)
 	}))
 	defer backend.Close()
-	app := webSSR{deps: runtimeDeps{client: backend.Client(), newID: fixedIDGenerator()}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
+	app := webSSR{deps: runtimeDeps{identityProvider: testIdentityProvider(os.Getenv("COMPOS_SESSION_PATH")), client: backend.Client(), newID: fixedIDGenerator()}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
 	request := httptest.NewRequest(http.MethodPost, "/objects/tasks/obj_requested", strings.NewReader("_csrf=csrf&_compos_form_mode=native&%2Ftitle=Updated"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
@@ -295,7 +296,7 @@ func TestWebSSRNativeEditUncheckedBooleanOverlaysFalseAndPreservesMissingFields(
 		}
 	}))
 	defer backend.Close()
-	app := webSSR{deps: runtimeDeps{client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
+	app := webSSR{deps: runtimeDeps{identityProvider: testIdentityProvider(os.Getenv("COMPOS_SESSION_PATH")), client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
 	request := httptest.NewRequest(http.MethodPost, "/objects/tasks/obj_1", strings.NewReader("_csrf=csrf&_compos_form_mode=native&_compos_present_%2Factive=1&%2Ftitle=New"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
@@ -339,7 +340,7 @@ func TestWebSSREditPreservesLargeVersionExactly(t *testing.T) {
 		}
 	}))
 	defer backend.Close()
-	app := webSSR{deps: runtimeDeps{client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
+	app := webSSR{deps: runtimeDeps{identityProvider: testIdentityProvider(os.Getenv("COMPOS_SESSION_PATH")), client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
 	request := httptest.NewRequest(http.MethodPost, "/objects/tasks/obj_1", strings.NewReader("_csrf=csrf&_compos_form_mode=native&%2Ftitle=Updated"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
@@ -367,7 +368,7 @@ func TestWebSSRUpdateRejectsMaxInt64VersionBeforeSubmit(t *testing.T) {
 		}
 	}))
 	defer backend.Close()
-	app := webSSR{deps: runtimeDeps{client: backend.Client(), newID: fixedIDGenerator()}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
+	app := webSSR{deps: runtimeDeps{identityProvider: testIdentityProvider(os.Getenv("COMPOS_SESSION_PATH")), client: backend.Client(), newID: fixedIDGenerator()}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
 	request := httptest.NewRequest(http.MethodPost, "/objects/tasks/obj_1", strings.NewReader("_csrf=csrf&_compos_form_mode=native&%2Ftitle=Updated"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
@@ -400,7 +401,7 @@ func TestWebSSRNativeEditWithoutTitlePreservesCurrentTitle(t *testing.T) {
 		}
 	}))
 	defer backend.Close()
-	app := webSSR{deps: runtimeDeps{client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
+	app := webSSR{deps: runtimeDeps{identityProvider: testIdentityProvider(os.Getenv("COMPOS_SESSION_PATH")), client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
 	request := httptest.NewRequest(http.MethodPost, "/objects/tasks/obj_1", strings.NewReader("_csrf=csrf&_compos_form_mode=native&%2Fnotes=updated"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
@@ -433,7 +434,7 @@ func TestWebSSRDoesNotRedirectWhenCanonicalRevalidationFails(t *testing.T) {
 		}
 	}))
 	defer backend.Close()
-	app := webSSR{deps: runtimeDeps{client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
+	app := webSSR{deps: runtimeDeps{identityProvider: testIdentityProvider(os.Getenv("COMPOS_SESSION_PATH")), client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
 	request := httptest.NewRequest(http.MethodPost, "/objects/tasks", strings.NewReader("_csrf=csrf&_compos_form_mode=native&%2Ftitle=Created"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
@@ -470,7 +471,7 @@ func TestWebSSRUpdateDoesNotRedirectWhenCanonicalRevalidationFails(t *testing.T)
 		}
 	}))
 	defer backend.Close()
-	app := webSSR{deps: runtimeDeps{client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
+	app := webSSR{deps: runtimeDeps{identityProvider: testIdentityProvider(os.Getenv("COMPOS_SESSION_PATH")), client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
 	request := httptest.NewRequest(http.MethodPost, "/objects/tasks/obj_1", strings.NewReader("_csrf=csrf&_compos_form_mode=native&%2Ftitle=Updated"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
@@ -502,7 +503,7 @@ func TestWebSSRUpdateRejectsWrongReceiptVersionWithoutRedirect(t *testing.T) {
 				}
 			}))
 			defer backend.Close()
-			app := webSSR{deps: runtimeDeps{client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
+			app := webSSR{deps: runtimeDeps{identityProvider: testIdentityProvider(os.Getenv("COMPOS_SESSION_PATH")), client: backend.Client(), now: func() time.Time { return time.Unix(0, 0).UTC() }, newID: fixedIDGenerator(), stdout: io.Discard, stderr: io.Discard}, session: cliSession{Server: backend.URL, WorkspaceID: "wks_1", PrincipalID: "usr_1"}, journal: ledger.NewMemoryJournal(), writes: true, csrf: "csrf"}
 			request := httptest.NewRequest(http.MethodPost, "/objects/tasks/obj_1", strings.NewReader("_csrf=csrf&_compos_form_mode=native&%2Ftitle=Updated"))
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			response := httptest.NewRecorder()

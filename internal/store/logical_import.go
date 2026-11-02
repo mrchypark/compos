@@ -67,14 +67,13 @@ type LogicalImportSummary struct {
 }
 
 var logicalImportOrder = []string{
-	"workspaces", "workspace_memberships", "auth_provider_identities", "auth_sessions",
+	"workspaces",
 	"object_types", "object_type_schema_revisions", "object_instances", "relation_definitions",
 	"object_relations", "relation_cardinality_slots", "object_field_index", "field_sequence_counters",
-	"generated_field_values", "actor_capabilities", "reactive_rules", "reactive_rule_revisions",
-	"adapter_inbound_events", "reactive_rule_evaluations", "spec_revisions", "knowledge_documents",
-	"knowledge_relations", "ontology_groundings", "command_ledger", "journal_records", "activities",
-	"outbox_events", "projection_events", "workspace_creation_requests", "principal_person_bindings",
-	"person_binding_claims",
+	"generated_field_values", "reactive_rules", "reactive_rule_revisions",
+	"adapter_inbound_events", "reactive_rule_evaluations", "spec_revisions",
+	"command_ledger", "journal_records", "activities",
+	"outbox_events", "projection_events", "workspace_creation_requests",
 }
 
 // DecodeLogicalImport validates the untrusted export before a target is opened
@@ -175,7 +174,7 @@ func validateLogicalImport(input *LogicalImport) error {
 			}
 			continue
 		}
-		if table.Name != "object_type_templates" && !strings.HasPrefix(table.Name, "_rhiza_") && !strings.HasPrefix(table.Name, "sqlite_") {
+		if !retiredLogicalTable(table.Name) && !strings.HasPrefix(table.Name, "_rhiza_") && !strings.HasPrefix(table.Name, "sqlite_") {
 			return fmt.Errorf("logical import excludes unsupported table %q", table.Name)
 		}
 	}
@@ -186,6 +185,15 @@ func validateLogicalImport(input *LogicalImport) error {
 		return errors.New("logical import must declare source schema_metadata as excluded")
 	}
 	return nil
+}
+
+func retiredLogicalTable(name string) bool {
+	switch name {
+	case "object_type_templates", "knowledge_documents", "knowledge_relations", "ontology_groundings",
+		"workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities", "principal_person_bindings", "person_binding_claims":
+		return true
+	}
+	return false
 }
 
 func logicalScalar(value any) (any, error) {

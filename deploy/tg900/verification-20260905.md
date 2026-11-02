@@ -1,5 +1,7 @@
 # tg900 SearchSyncer 검증 — 2026-09-05
 
+Historical verification record: Knowledge support described here has since been removed; Knowledge is externally owned.
+
 Compos·Conductor·SearchSyncer 모두 Ready 1/1. 기존 `compos` 네임스페이스의
 인덱스와 Syncer는 변경하지 않았다. 빌드·푸시는 tg900 BuildKit 사용.
 

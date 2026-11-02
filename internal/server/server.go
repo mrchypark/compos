@@ -11,85 +11,50 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mrchypark/compos/internal/kernel"
-	rhizaprojection "github.com/mrchypark/compos/internal/rhizaprojection"
 	"github.com/mrchypark/compos/internal/store"
 	"github.com/mrchypark/rhiza"
 )
 
 type Server struct {
-	store                       *store.Store
-	kernel                      *kernel.Executor
-	mux                         *http.ServeMux
-	graphProjection             *rhizaprojection.Projection
-	graphProjectionSet          bool
-	graphProjectionMu           sync.RWMutex
-	graphProjectionSync         sync.RWMutex
-	graphProjectionErr          string
-	graphProjectionHeads        map[string]int64
-	graphProjectionCursors      map[string]int64
-	graphProjectionRebuilding   bool
-	graphProjectionLastSuccess  string
-	graphProjectionRebuilds     int64
-	graphProjectionWake         chan struct{}
-	graphProjectionCancel       context.CancelFunc
-	graphProjectionDone         chan struct{}
-	conductorURL                string
-	conductorToken              string
-	conductorCallbackToken      string
-	conductorClient             *http.Client
-	conductorWake               chan struct{}
-	conductorCancel             context.CancelFunc
-	conductorDone               chan struct{}
-	workflowWake                chan struct{}
-	workflowCancel              context.CancelFunc
-	workflowDone                chan struct{}
-	searchURL                   string
-	searchIndex                 string
-	searchKey                   string
-	searchClient                *http.Client
-	searchSyncerToken           string
-	searchSyncerWorkspaceID     string
-	auth                        AuthConfig
-	authClient                  *http.Client
-	oauth2IntrospectionEndpoint string
-	oauth2UserInfoEndpoint      string
+	authority               Authority
+	store                   *store.Store
+	kernel                  *kernel.Executor
+	mux                     *http.ServeMux
+	conductorURL            string
+	conductorToken          string
+	conductorCallbackToken  string
+	conductorClient         *http.Client
+	conductorWake           chan struct{}
+	conductorCancel         context.CancelFunc
+	conductorDone           chan struct{}
+	workflowWake            chan struct{}
+	workflowCancel          context.CancelFunc
+	workflowDone            chan struct{}
+	searchURL               string
+	searchIndex             string
+	searchKey               string
+	searchClient            *http.Client
+	searchSyncerWorkspaceID string
 }
 
-func New(s *store.Store) *Server {
+func New(s *store.Store) *Server { return NewWithAuthority(s, nil) }
+
+func NewWithAuthority(s *store.Store, authority Authority) *Server {
 	server := &Server{
 		store: s, kernel: kernel.NewStoreExecutor(s), mux: http.NewServeMux(),
-		searchClient: &http.Client{Timeout: 10 * time.Second}, auth: AuthConfig{Mode: AuthModeNone},
-		authClient: &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }},
+		searchClient: &http.Client{Timeout: 10 * time.Second},
+	}
+	server.authority = authority
+	if authority != nil {
+		server.kernel.AuthorizeCommand = authority.AuthorizeCommand
 	}
 	server.routes()
 	server.enableWorkflowScheduler()
-	if s.GraphAvailable() {
-		server.enableRhizaGraph()
-	}
 	return server
-}
-
-func (server *Server) enableRhizaGraph() {
-	server.graphProjectionSet = true
-	projection, err := rhizaprojection.Open(server.store)
-	if err != nil {
-		server.graphProjectionErr = err.Error()
-		return
-	}
-	server.graphProjection = projection
-	server.graphProjectionErr = "reconciling"
-	server.graphProjectionHeads = map[string]int64{}
-	server.graphProjectionCursors = map[string]int64{}
-	server.graphProjectionWake = make(chan struct{}, 1)
-	server.graphProjectionDone = make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
-	server.graphProjectionCancel = cancel
-	go server.runGraphProjectionReconciler(ctx)
 }
 
 func (s *Server) Close() error {
@@ -100,13 +65,6 @@ func (s *Server) Close() error {
 	if s.conductorCancel != nil {
 		s.conductorCancel()
 		<-s.conductorDone
-	}
-	if s.graphProjectionCancel != nil {
-		s.graphProjectionCancel()
-		<-s.graphProjectionDone
-	}
-	if s.graphProjection != nil {
-		return s.graphProjection.Close()
 	}
 	return nil
 }
@@ -120,11 +78,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/health", s.health)
-	s.mux.HandleFunc("POST /api/v1/auth/rauthy", s.authRauthy)
-	s.mux.HandleFunc("POST /api/v1/auth/pocketbase", s.authPocketBase)
-	s.mux.HandleFunc("GET /api/v1/auth/session", s.authSession)
-	s.mux.HandleFunc("POST /api/v1/auth/logout", s.authLogout)
-	s.mux.HandleFunc("POST /api/v1/auth/identity", s.authIdentity)
 	s.mux.HandleFunc("GET /api/v1/search-syncer/workspace", s.searchSyncerWorkspace)
 	s.mux.HandleFunc("POST /api/v1/workspaces", s.createWorkspace)
 	s.mux.HandleFunc("GET /api/v1/kernel/command-registry", func(w http.ResponseWriter, r *http.Request) {
@@ -135,8 +88,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/definitions", s.listDefinitions)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/definitions/{revision_id}", s.readDefinition)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/objects/{object_id}/relations", s.listObjectRelations)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/actor-capabilities", s.listCapabilities)
-	s.mux.HandleFunc("POST /api/v1/workspaces/{workspace_id}/actor-capabilities", s.grantCapability)
 	s.mux.HandleFunc("POST /api/v1/workspaces/{workspace_id}/adapter/inbound-events", s.appendAdapterEvent)
 	s.mux.HandleFunc("POST /internal/v1/conductor/callbacks", s.appendConductorCallback)
 	s.mux.HandleFunc("GET /v1/connector/objects/{object_key}/schema", s.conductorObjectSchema)
@@ -151,17 +102,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/work", s.listHumanWork)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/work/{stream_id}", s.readWork)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/events", s.listDomainEvents)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/knowledge/proposals", s.listKnowledgeProposals)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/command-ledger", s.listLedger)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/command-ledger/{command_id}", s.getLedger)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/object-types/{object_type_id}/schema-revisions", s.schemaRevisions)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/projection/events", s.projectionEvents)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/projection/snapshot", s.projectionSnapshot)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/knowledge", s.listKnowledge)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/knowledge/{bundle_id}/{concept_id...}", s.readKnowledge)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/ontology/traverse", s.traverseOntology)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/ontology/reachable-node-ids", s.reachableOntologyNodeIDs)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/ontology/groundings", s.listGroundings)
 	s.mux.HandleFunc("POST /api/v1/workspaces/{workspace_id}/search", s.search)
 }
 
@@ -170,30 +115,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "storage_unavailable", "storage", true, err.Error())
 		return
 	}
-	s.graphProjectionMu.RLock()
-	status := "disabled"
-	if s.graphProjectionSet {
-		status = "degraded"
-		if s.graphProjectionRebuilding {
-			status = "rebuilding"
-		} else if s.graphProjection != nil && s.graphProjectionErr == "" && sequencesCurrent(s.graphProjectionHeads, s.graphProjectionCursors) {
-			status = "ready"
-		}
-	}
-	lags := map[string]int64{}
-	for workspaceID, head := range s.graphProjectionHeads {
-		lags[workspaceID] = head - s.graphProjectionCursors[workspaceID]
-	}
-	projectionStatus := map[string]any{
-		"enabled": s.graphProjectionSet, "status": status, "healthy": status == "ready", "error": nullableString(s.graphProjectionErr),
-		"production_approved": false, "request_reads": status == "ready", "search_backend": map[bool]string{true: "meilisearch", false: "unavailable"}[s.searchURL != ""], "traversal_backend": "sqlite",
-		"reachable_node_ids_backend": map[bool]string{true: "rhiza_graph", false: "unavailable"}[status == "ready"],
-		"sqlite_heads":               cloneSequences(s.graphProjectionHeads), "graph_cursors": cloneSequences(s.graphProjectionCursors), "lag_events": lags,
-		"last_success_at": nullableString(s.graphProjectionLastSuccess),
-		"rebuild_count":   s.graphProjectionRebuilds, "projection_version": rhizaprojection.SchemaVersion,
-	}
-	s.graphProjectionMu.RUnlock()
-	write(w, 200, map[string]any{"status": "ok", "storage": map[string]any{"kind": s.store.Kind(), "cluster_id": s.store.ClusterID(), "ready": s.store.Ready()}, "knowledge_projection": projectionStatus})
+	write(w, 200, map[string]any{"status": "ok", "storage": map[string]any{"kind": s.store.Kind(), "cluster_id": s.store.ClusterID(), "ready": s.store.Ready()}})
 }
 
 func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -249,15 +171,12 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 				}
 				return err
 			}
-			if _, err = tx.Exec(`INSERT INTO workspace_memberships VALUES(?,?,'owner',?)`, id, principal, now); err != nil {
-				return err
-			}
 			if err = provisionBuiltins(r.Context(), tx, id, body.Name, principal, now); err != nil {
 				return err
 			}
 			response = map[string]any{"data": map[string]any{
 				"id": id, "workspace_id": id, "key": body.Key, "name": body.Name, "version": 1,
-				"creator_principal_id": principal, "owner_principal_id": principal,
+				"creator_principal_id":                 principal,
 				"creator_person_object_instance_id":    "obj_creator_" + id,
 				"workspace_company_object_instance_id": "obj_company_" + id,
 				"works_for_relation_definition_id":     "rdf_builtin_works_for_" + id,
@@ -322,7 +241,7 @@ func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key,
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	response := map[string]any{"data": map[string]any{
 		"id": id, "workspace_id": id, "key": key, "name": name, "version": 1,
-		"creator_principal_id": principal, "owner_principal_id": principal,
+		"creator_principal_id":                 principal,
 		"creator_person_object_instance_id":    "obj_creator_" + id,
 		"workspace_company_object_instance_id": "obj_company_" + id,
 		"works_for_relation_definition_id":     "rdf_builtin_works_for_" + id,
@@ -335,7 +254,6 @@ func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key,
 		{SQL: `SELECT authenticated_principal_id FROM workspace_creation_requests WHERE authenticated_principal_id=? AND idempotency_key=?`, Args: []any{principal, idempotencyKey}, WantRows: true, ExpectedReturnedRows: &zero},
 		{SQL: `SELECT id FROM workspaces WHERE key=?`, Args: []any{key}, WantRows: true, ExpectedReturnedRows: &zero},
 		{SQL: `INSERT INTO workspaces(id,key,name,version,created_at,updated_at) VALUES(?,?,?,1,?,?)`, Args: []any{id, key, name, now, now}, ExpectedRowsAffected: &one},
-		{SQL: `INSERT INTO workspace_memberships(workspace_id,principal_id,role,created_at) VALUES(?,?,'owner',?)`, Args: []any{id, principal, now}, ExpectedRowsAffected: &one},
 	}
 	builtins, err := provisionBuiltinStatements(ctx, id, name, principal, now)
 	if err != nil {
@@ -415,9 +333,6 @@ func provisionBuiltins(ctx context.Context, tx contextExecer, workspace, workspa
 	if _, err := tx.ExecContext(ctx, `INSERT INTO object_instances(id,workspace_id,object_type_id,object_type_schema_version,title,payload_json,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,?,1,?,?,?,?)`, companyID, workspace, companiesID, 1, workspaceName, companyValues, ts, ts, principal, principal); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO principal_person_bindings VALUES(?,?,?,?,?,?)`, workspace, principal, personID, "workspace_creator", principal, ts); err != nil {
-		return err
-	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO object_relations VALUES(?,?,?,?,?,1,?,?,?,?)`, edgeID, workspace, relationID, personID, companyID, ts, ts, principal, principal); err != nil {
 		return err
 	}
@@ -460,12 +375,6 @@ func (s *Server) submitCommand(w http.ResponseWriter, r *http.Request) {
 		commandError(w, err)
 		return
 	}
-	if c.CommandType == "knowledge.accept" || c.CommandType == "knowledge.remove" {
-		if receipt.ProjectionSequence != nil {
-			s.markGraphProjectionHead(c.WorkspaceID, *receipt.ProjectionSequence)
-		}
-		s.wakeGraphProjection()
-	}
 	if c.CommandType == "function.invoke" {
 		s.wakeConductor()
 	}
@@ -475,20 +384,6 @@ func (s *Server) submitCommand(w http.ResponseWriter, r *http.Request) {
 		response["client_refs"] = receipt.ClientRefs
 	}
 	write(w, 200, response)
-}
-
-func (s *Server) graphProjectionReady(workspaceID string) bool {
-	s.graphProjectionMu.RLock()
-	defer s.graphProjectionMu.RUnlock()
-	return s.graphProjection != nil && s.graphProjectionErr == "" && !s.graphProjectionRebuilding && s.graphProjectionCursors[workspaceID] >= s.graphProjectionHeads[workspaceID]
-}
-
-func cloneSequences(source map[string]int64) map[string]int64 {
-	copy := make(map[string]int64, len(source))
-	for key, value := range source {
-		copy[key] = value
-	}
-	return copy
 }
 
 func (s *Server) commandSurface(w http.ResponseWriter, r *http.Request) {
@@ -953,17 +848,12 @@ func (s *Server) projectionSnapshot(w http.ResponseWriter, r *http.Request) {
 		dbError(w, err)
 		return
 	}
-	knowledge, err := s.snapshotKnowledge(r.Context(), workspace)
-	if err != nil {
-		dbError(w, err)
-		return
-	}
-	data := map[string]any{"objects": objects, "knowledge": knowledge}
+	data := map[string]any{"objects": objects}
 	created := time.Now().UTC().Format(time.RFC3339Nano)
 	snapshot := map[string]any{
 		"snapshot_id": "snap_" + workspace + "_" + strconv.FormatInt(sequence, 10), "workspace_id": workspace,
 		"projection_sequence": sequence, "created_at": created, "signature": nil, "signing_key_id": nil,
-		"schema_version": 2, "data_hash": sha([]byte(canonical(data))), "objects": objects, "knowledge": knowledge,
+		"schema_version": 3, "data_hash": sha([]byte(canonical(data))), "objects": objects,
 	}
 	write(w, 200, map[string]any{"snapshot": snapshot, "consistency": consistency("canonical_linearizable")})
 }
@@ -995,28 +885,6 @@ func (s *Server) snapshotObjects(ctx context.Context, workspace string) ([]any, 
 		data = append(data, item)
 	}
 	return data, nil
-}
-
-func (s *Server) snapshotKnowledge(ctx context.Context, workspace string) ([]any, error) {
-	rows, err := s.store.ReadRows(ctx, store.ReadLocal, `SELECT bundle_id,concept_id,concept_type,title,description,resource,body_markdown,content_hash,created_at,updated_at FROM knowledge_documents WHERE workspace_id=? ORDER BY bundle_id,concept_id`, workspace)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	data := []any{}
-	for rows.Next() {
-		var bundle, concept, conceptType, body, hash, created, updated string
-		var title, description, resource sql.NullString
-		if err := rows.Scan(&bundle, &concept, &conceptType, &title, &description, &resource, &body, &hash, &created, &updated); err != nil {
-			return nil, err
-		}
-		data = append(data, map[string]any{
-			"id": bundle + ":" + concept, "workspace_id": workspace, "bundle_id": bundle, "concept_id": concept,
-			"concept_type": conceptType, "title": nullString(title), "description": nullString(description),
-			"resource": nullString(resource), "body_markdown": body, "content_hash": hash, "created_at": created, "updated_at": updated,
-		})
-	}
-	return data, rows.Err()
 }
 
 func (s *Server) appendAdapterEvent(w http.ResponseWriter, r *http.Request) {
@@ -1107,56 +975,6 @@ func (s *Server) appendAdapterEventRhiza(ctx context.Context, id, workspaceID, a
 	return existingID, existingAt, err == nil && existingID == id, nil
 }
 
-func (s *Server) listCapabilities(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeAdmin(w, r) {
-		return
-	}
-	rows, err := s.store.ReadRows(r.Context(), store.ReadLocal, `SELECT id,principal_id,actor_type,actor_id,command_type,causation_source,relation_definition_id,idempotency_key_prefix,max_automation_recursion_depth FROM actor_capabilities WHERE workspace_id=? ORDER BY id`, r.PathValue("workspace_id"))
-	if err != nil {
-		dbError(w, err)
-		return
-	}
-	defer rows.Close()
-	data := []any{}
-	for rows.Next() {
-		var id, principal, actorType, actorID, commandType, source, relation, prefix string
-		var max sql.NullInt64
-		_ = rows.Scan(&id, &principal, &actorType, &actorID, &commandType, &source, &relation, &prefix, &max)
-		data = append(data, map[string]any{"id": id, "principal_id": principal, "requested_actor": map[string]any{"type": actorType, "id": actorID}, "command_type": commandType, "causation_source": source, "relation_definition_id": nullableString(relation), "idempotency_key_prefix": prefix, "max_automation_recursion_depth": nullInt(max)})
-	}
-	write(w, 200, map[string]any{"data": data})
-}
-
-func (s *Server) grantCapability(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeAdmin(w, r) {
-		return
-	}
-	var body struct {
-		PrincipalID                 string       `json:"principal_id"`
-		RequestedActor              kernel.Actor `json:"requested_actor"`
-		CommandType                 string       `json:"command_type"`
-		CausationSource             string       `json:"causation_source"`
-		RelationDefinitionID        *string      `json:"relation_definition_id"`
-		IdempotencyKeyPrefix        string       `json:"idempotency_key_prefix"`
-		MaxAutomationRecursionDepth *int64       `json:"max_automation_recursion_depth"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	relation := ""
-	if body.RelationDefinitionID != nil {
-		relation = *body.RelationDefinitionID
-	}
-	id := "cap_" + uuid.NewString()
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	err := s.store.Exec(r.Context(), "capability:"+id, `INSERT INTO actor_capabilities VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, r.PathValue("workspace_id"), body.PrincipalID, body.RequestedActor.Type, body.RequestedActor.ID, body.CommandType, body.CausationSource, relation, body.IdempotencyKeyPrefix, body.MaxAutomationRecursionDepth, now, now)
-	if err != nil {
-		dbError(w, err)
-		return
-	}
-	write(w, 201, map[string]any{"data": map[string]any{"id": id}})
-}
-
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return decodeLimit(w, r, v, 1<<20)
 }
@@ -1211,6 +1029,9 @@ func commandError(w http.ResponseWriter, err error) {
 	case "quorum_unavailable":
 		status = http.StatusServiceUnavailable
 		category = "storage"
+	case "external_authority_unavailable":
+		status = http.StatusServiceUnavailable
+		category = "dependency"
 	}
 	problemDetails(w, status, e.Outcome, category, e.Retryable, e.Message, e.Details)
 }
@@ -1218,7 +1039,7 @@ func principal(r *http.Request) string {
 	if value, ok := r.Context().Value(principalContextKey{}).(string); ok && value != "" {
 		return value
 	}
-	return "dev"
+	return ""
 }
 func raw(s string) any       { var v any; _ = json.Unmarshal([]byte(s), &v); return v }
 func canonical(v any) string { b, _ := json.Marshal(v); return string(b) }

@@ -15,40 +15,6 @@ CREATE TABLE workspaces (
   updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T*Z')
 ) STRICT;
 
-CREATE TABLE workspace_memberships (
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  principal_id TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('member', 'owner')),
-  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T*Z'),
-  PRIMARY KEY (workspace_id, principal_id)
-) STRICT;
-CREATE INDEX idx_workspace_memberships_principal ON workspace_memberships(principal_id, workspace_id);
-CREATE UNIQUE INDEX idx_workspace_memberships_one_owner ON workspace_memberships(workspace_id) WHERE role = 'owner';
-
-CREATE TABLE auth_provider_identities (
-  principal_id TEXT PRIMARY KEY,
-  provider_identity_key TEXT NOT NULL UNIQUE,
-  email TEXT NOT NULL,
-  email_verified INTEGER NOT NULL CHECK (email_verified IN (0, 1)),
-  name TEXT,
-  picture TEXT,
-  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T*Z'),
-  updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T*Z'),
-  last_login_at TEXT NOT NULL CHECK (last_login_at GLOB '????-??-??T*Z')
-) STRICT;
-CREATE INDEX idx_auth_provider_identities_email ON auth_provider_identities(email);
-
-CREATE TABLE auth_sessions (
-  id TEXT PRIMARY KEY,
-  principal_id TEXT NOT NULL,
-  token_hash TEXT NOT NULL UNIQUE,
-  expires_at INTEGER NOT NULL CHECK (expires_at > 0),
-  revoked_at TEXT CHECK (revoked_at IS NULL OR revoked_at GLOB '????-??-??T*Z'),
-  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T*Z'),
-  last_used_at TEXT NOT NULL CHECK (last_used_at GLOB '????-??-??T*Z')
-) STRICT;
-CREATE INDEX idx_auth_sessions_principal ON auth_sessions(principal_id);
-
 CREATE TABLE object_types (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -240,24 +206,6 @@ CREATE TABLE generated_field_values (
   FOREIGN KEY (workspace_id, object_instance_id) REFERENCES object_instances(workspace_id, id)
 ) STRICT;
 
-CREATE TABLE actor_capabilities (
-  id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  principal_id TEXT NOT NULL,
-  actor_type TEXT NOT NULL CHECK (actor_type IN ('service', 'automation')),
-  actor_id TEXT NOT NULL,
-  command_type TEXT NOT NULL,
-  causation_source TEXT NOT NULL CHECK (causation_source IN ('cli','api','automation','workflow','adapter_reducer')),
-  relation_definition_id TEXT NOT NULL DEFAULT '',
-  idempotency_key_prefix TEXT NOT NULL CHECK (trim(idempotency_key_prefix) <> ''),
-  max_automation_recursion_depth INTEGER CHECK (max_automation_recursion_depth IS NULL OR max_automation_recursion_depth >= 0),
-  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T*Z'),
-  updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T*Z'),
-  UNIQUE (workspace_id, principal_id, actor_type, actor_id, command_type, causation_source, relation_definition_id),
-  UNIQUE (workspace_id, id)
-) STRICT;
-CREATE INDEX idx_actor_capabilities_principal_workspace ON actor_capabilities(principal_id, workspace_id);
-
 CREATE TABLE reactive_rules (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -400,60 +348,6 @@ CREATE TRIGGER trg_spec_revisions_immutable_delete
 BEFORE DELETE ON spec_revisions
 BEGIN SELECT RAISE(ABORT, 'spec revisions are immutable'); END;
 
-CREATE TABLE knowledge_documents (
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  bundle_id TEXT NOT NULL CHECK (trim(bundle_id) <> ''),
-  concept_id TEXT NOT NULL CHECK (trim(concept_id) <> ''),
-  concept_type TEXT NOT NULL CHECK (trim(concept_type) <> ''),
-  title TEXT,
-  description TEXT,
-  resource TEXT,
-  frontmatter_json TEXT NOT NULL CHECK (json_valid(frontmatter_json) AND json_type(frontmatter_json) = 'object'),
-  body_markdown TEXT NOT NULL,
-  source_markdown TEXT NOT NULL,
-  content_hash TEXT NOT NULL CHECK (content_hash GLOB 'sha256:*'),
-  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T*Z'),
-  updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T*Z'),
-  created_by_principal_id TEXT NOT NULL,
-  updated_by_principal_id TEXT NOT NULL,
-  PRIMARY KEY (workspace_id, bundle_id, concept_id)
-) STRICT;
-CREATE INDEX idx_knowledge_documents_bundle_type ON knowledge_documents(workspace_id, bundle_id, concept_type, concept_id);
-
-CREATE TABLE knowledge_relations (
-  workspace_id TEXT NOT NULL,
-  bundle_id TEXT NOT NULL,
-  source_concept_id TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('markdown','ontology')),
-  predicate TEXT NOT NULL CHECK (trim(predicate) <> ''),
-  target_ref TEXT NOT NULL CHECK (trim(target_ref) <> ''),
-  target_is_external INTEGER NOT NULL CHECK (target_is_external IN (0, 1)),
-  cardinality TEXT CHECK (cardinality IS NULL OR cardinality IN ('one_to_one','one_to_many','many_to_one','many_to_many')),
-  metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
-  PRIMARY KEY (workspace_id, bundle_id, source_concept_id, kind, predicate, target_ref),
-  FOREIGN KEY (workspace_id, bundle_id, source_concept_id)
-    REFERENCES knowledge_documents(workspace_id, bundle_id, concept_id) ON DELETE CASCADE
-) STRICT;
-CREATE INDEX idx_knowledge_relations_out ON knowledge_relations(workspace_id, bundle_id, source_concept_id, kind);
-CREATE INDEX idx_knowledge_relations_in ON knowledge_relations(workspace_id, bundle_id, target_ref, kind) WHERE target_is_external = 0;
-
-CREATE TABLE ontology_groundings (
-  workspace_id TEXT NOT NULL,
-  bundle_id TEXT NOT NULL,
-  concept_id TEXT NOT NULL,
-  entity_definition_id TEXT NOT NULL,
-  predicate TEXT NOT NULL DEFAULT 'represented_by' CHECK (trim(predicate) <> ''),
-  mapping_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(mapping_json) AND json_type(mapping_json) = 'object'),
-  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T*Z'),
-  created_by_principal_id TEXT NOT NULL,
-  PRIMARY KEY (workspace_id, bundle_id, concept_id, entity_definition_id, predicate),
-  FOREIGN KEY (workspace_id, bundle_id, concept_id)
-    REFERENCES knowledge_documents(workspace_id, bundle_id, concept_id) ON DELETE CASCADE,
-  FOREIGN KEY (workspace_id, entity_definition_id)
-    REFERENCES object_types(workspace_id, id)
-) STRICT;
-CREATE INDEX idx_ontology_groundings_entity ON ontology_groundings(workspace_id, entity_definition_id, bundle_id, concept_id);
-
 CREATE TABLE command_ledger (
   command_id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -574,63 +468,3 @@ CREATE TABLE workspace_creation_requests (
   PRIMARY KEY (authenticated_principal_id, idempotency_key),
   UNIQUE (workspace_id)
 ) STRICT;
-
-CREATE TABLE principal_person_bindings (
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  principal_id TEXT NOT NULL,
-  person_object_instance_id TEXT NOT NULL,
-  binding_method TEXT NOT NULL,
-  verified_claim TEXT NOT NULL,
-  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T*Z'),
-  PRIMARY KEY (workspace_id, principal_id),
-  UNIQUE (workspace_id, person_object_instance_id),
-  FOREIGN KEY (workspace_id, person_object_instance_id) REFERENCES object_instances(workspace_id, id)
-) STRICT;
-
-CREATE TABLE person_binding_claims (
-  workspace_id TEXT NOT NULL,
-  person_object_instance_id TEXT NOT NULL,
-  claim_type TEXT NOT NULL CHECK (claim_type IN ('email','phone')),
-  normalized_claim TEXT NOT NULL,
-  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T*Z'),
-  created_by_principal_id TEXT NOT NULL,
-  PRIMARY KEY (workspace_id, person_object_instance_id, claim_type),
-  FOREIGN KEY (workspace_id, person_object_instance_id) REFERENCES object_instances(workspace_id, id)
-) STRICT;
-
-CREATE TRIGGER trg_principal_person_bindings_person_insert
-BEFORE INSERT ON principal_person_bindings
-WHEN NOT EXISTS (
-  SELECT 1 FROM object_instances i
-  JOIN object_types t ON t.workspace_id = i.workspace_id AND t.id = i.object_type_id
-  WHERE i.workspace_id = NEW.workspace_id
-    AND i.id = NEW.person_object_instance_id
-    AND t.id = 'otp_builtin_person_' || NEW.workspace_id
-    AND t.key = 'people' AND t.archived_at IS NULL
-)
-BEGIN SELECT RAISE(ABORT, 'principal person binding target must be built-in person'); END;
-
-CREATE TRIGGER trg_person_binding_claims_person_insert
-BEFORE INSERT ON person_binding_claims
-WHEN NOT EXISTS (
-  SELECT 1 FROM object_instances i
-  JOIN object_types t ON t.workspace_id = i.workspace_id AND t.id = i.object_type_id
-  WHERE i.workspace_id = NEW.workspace_id
-    AND i.id = NEW.person_object_instance_id
-    AND t.id = 'otp_builtin_person_' || NEW.workspace_id
-    AND t.key = 'people' AND t.archived_at IS NULL
-)
-BEGIN SELECT RAISE(ABORT, 'person binding claim target must be built-in person'); END;
-
-CREATE TRIGGER trg_principal_person_bindings_immutable_update
-BEFORE UPDATE ON principal_person_bindings
-BEGIN SELECT RAISE(ABORT, 'principal person bindings are immutable'); END;
-CREATE TRIGGER trg_principal_person_bindings_immutable_delete
-BEFORE DELETE ON principal_person_bindings
-BEGIN SELECT RAISE(ABORT, 'principal person bindings are immutable'); END;
-CREATE TRIGGER trg_person_binding_claims_immutable_update
-BEFORE UPDATE ON person_binding_claims
-BEGIN SELECT RAISE(ABORT, 'person binding claims are immutable'); END;
-CREATE TRIGGER trg_person_binding_claims_immutable_delete
-BEFORE DELETE ON person_binding_claims
-BEGIN SELECT RAISE(ABORT, 'person binding claims are immutable'); END;

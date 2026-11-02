@@ -13,21 +13,21 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mrchypark/compos/internal/knowledge"
 	"github.com/mrchypark/compos/internal/reactiverule"
 	"github.com/mrchypark/compos/internal/store"
 	"github.com/mrchypark/rhiza"
 )
 
 type Executor struct {
-	transact       func(context.Context, string, func(store.Tx) error) error
-	store          *store.Store
-	now            func() time.Time
-	rhizaCommit    func(context.Context, string, Actor, Command, []rhiza.SQLStatement, effect, string) (Receipt, error)
-	rhizaSecondary []effect
-	workObjects    map[string]*workPendingObject
-	workSequences  *workSequenceReservations
-	workResults    map[string]WorkChangeResult
+	AuthorizeCommand CommandAuthorizer
+	transact         func(context.Context, string, func(store.Tx) error) error
+	store            *store.Store
+	now              func() time.Time
+	rhizaCommit      func(context.Context, string, Actor, Command, []rhiza.SQLStatement, effect, string) (Receipt, error)
+	rhizaSecondary   []effect
+	workObjects      map[string]*workPendingObject
+	workSequences    *workSequenceReservations
+	workResults      map[string]WorkChangeResult
 }
 
 func NewExecutor(db *sql.DB) *Executor {
@@ -67,6 +67,10 @@ func (e *Executor) Execute(ctx context.Context, principal string, c Command) (Re
 	if (c.CommandType == "function.record_result" || c.CommandType == "agent.record_result") && c.Causation.Source != "adapter_reducer" {
 		return Receipt{}, reject("forbidden", "external runtime result commands require adapter_reducer causation")
 	}
+	ctx = context.WithValue(ctx, commandAuthorizerKey{}, e.AuthorizeCommand)
+	if _, err := authorize(ctx, nil, principal, c); err != nil {
+		return Receipt{}, err
+	}
 	if e.store != nil && e.store.Kind() == "rhiza" {
 		return e.executeRhiza(ctx, principal, c)
 	}
@@ -81,7 +85,7 @@ func (e *Executor) Execute(ctx context.Context, principal string, c Command) (Re
 		var workspaceExists int
 		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM workspaces WHERE id=?`, c.WorkspaceID).Scan(&workspaceExists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return reject("forbidden", "workspace membership is required")
+				return reject("forbidden", "workspace does not exist")
 			}
 			return err
 		}
@@ -135,83 +139,6 @@ func duplicateReceipt(ctx context.Context, tx store.Tx, principal string, c Comm
 	}
 	receipt.Outcome = "duplicate"
 	return receipt, true, nil
-}
-
-func authorize(ctx context.Context, tx store.Tx, principal string, c Command) (Actor, error) {
-	var member int
-	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM workspace_memberships WHERE workspace_id=? AND principal_id=?`, c.WorkspaceID, principal).Scan(&member); err != nil {
-		return Actor{}, reject("forbidden", "workspace membership is required")
-	}
-	if reactiveRuleLifecycleCommand(c.CommandType) {
-		var creator string
-		if err := tx.QueryRowContext(ctx, `SELECT created_by_principal_id FROM reactive_rules WHERE workspace_id=? AND id=? AND archived_at IS NULL`, c.WorkspaceID, *c.Target.AggregateID).Scan(&creator); err != nil {
-			return Actor{}, reject("precondition_failed", "ReactiveRule does not exist")
-		}
-		if creator != principal {
-			return Actor{}, reject("forbidden", "ReactiveRule lifecycle commands require the creator principal")
-		}
-	}
-	if c.RequestedActor == nil {
-		return Actor{Type: "user", ID: principal}, nil
-	}
-	actor := *c.RequestedActor
-	if actor.ID == "" {
-		return Actor{}, reject("forbidden", "requested actor id is required")
-	}
-	if actor.Type == "user" {
-		if actor.ID != principal {
-			return Actor{}, reject("forbidden", "user actor must match the authenticated principal")
-		}
-		return actor, nil
-	}
-	if actor.Type != "service" && actor.Type != "automation" {
-		return Actor{}, reject("forbidden", "requested actor type is invalid")
-	}
-	if actor.Type == "automation" && automationActorDenied(c.CommandType) {
-		return Actor{}, reject("forbidden", "automation actor may not execute this command")
-	}
-	relation := ""
-	var payload map[string]any
-	_ = json.Unmarshal(c.Payload, &payload)
-	if value, ok := payload["relation_definition_id"].(string); ok {
-		relation = value
-	}
-	var prefix string
-	var max sql.NullInt64
-	err := tx.QueryRowContext(ctx, `SELECT idempotency_key_prefix,max_automation_recursion_depth FROM actor_capabilities WHERE workspace_id=? AND principal_id=? AND actor_type=? AND actor_id=? AND command_type=? AND causation_source=? AND relation_definition_id IN ('',?) ORDER BY relation_definition_id DESC LIMIT 1`, c.WorkspaceID, principal, actor.Type, actor.ID, c.CommandType, c.Causation.Source, relation).Scan(&prefix, &max)
-	if err != nil {
-		return Actor{}, reject("forbidden", "requested actor capability is missing")
-	}
-	if !strings.HasPrefix(c.IdempotencyKey, prefix) {
-		return Actor{}, reject("forbidden", "idempotency key is outside the actor capability")
-	}
-	if actor.Type == "automation" && max.Valid {
-		var automation struct {
-			RecursionDepth int64 `json:"recursion_depth"`
-		}
-		if len(c.Causation.Automation) == 0 || json.Unmarshal(c.Causation.Automation, &automation) != nil || automation.RecursionDepth > max.Int64 {
-			return Actor{}, reject("automation_recursion_limit", "automation recursion limit exceeded")
-		}
-	}
-	return actor, nil
-}
-
-func reactiveRuleLifecycleCommand(commandType string) bool {
-	switch commandType {
-	case "reactive_rule.publish_revision", "reactive_rule.disable", "reactive_rule.retire", "reactive_rule.delete":
-		return true
-	default:
-		return false
-	}
-}
-
-func automationActorDenied(commandType string) bool {
-	switch commandType {
-	case "reactive_rule.define", "reactive_rule.publish_revision", "reactive_rule.disable", "reactive_rule.retire", "reactive_rule.delete", "object_type.schema_evolve", "object_type.delete", "object.delete", "relation_definition.delete":
-		return true
-	default:
-		return false
-	}
 }
 
 func checkPreconditions(ctx context.Context, tx store.Tx, c Command, pending ...map[string]*workPendingObject) error {
@@ -281,14 +208,6 @@ func (e *Executor) apply(ctx context.Context, tx store.Tx, principal string, c C
 		return recordWorkDeadline(ctx, tx, c, p)
 	case "event.emit":
 		return emitDomainEvent(ctx, tx, principal, c, p)
-	case "knowledge.propose":
-		return proposeKnowledge(ctx, tx, principal, c, p)
-	case "knowledge.review":
-		return reviewKnowledge(ctx, tx, principal, c, p, now)
-	case "knowledge.accept":
-		return acceptKnowledge(ctx, tx, principal, c, p, now)
-	case "knowledge.remove":
-		return removeKnowledge(ctx, tx, c, p)
 	case "object_type.define":
 		return defineObjectType(ctx, tx, principal, c, p, now)
 	case "object_type.schema_evolve":
@@ -314,109 +233,6 @@ func (e *Executor) apply(ctx context.Context, tx store.Tx, principal string, c C
 	default:
 		return effect{}, reject("validation_failed", "command is not implemented")
 	}
-}
-
-func acceptKnowledge(ctx context.Context, tx store.Tx, principal string, c Command, p map[string]any, now time.Time) (effect, error) {
-	bundleID := strings.TrimSpace(p["bundle_id"].(string))
-	if !validBundleID(bundleID) {
-		return effect{}, reject("validation_failed", "payload.bundle_id must be a non-empty identifier of at most 128 characters")
-	}
-	document, err := knowledge.Parse(p["path"].(string), p["source_markdown"].(string))
-	if err != nil {
-		return effect{}, reject("validation_failed", err.Error())
-	}
-	type resolvedGrounding struct {
-		entityID, predicate, mapping string
-	}
-	groundings := make([]resolvedGrounding, 0, len(document.Groundings))
-	for _, grounding := range document.Groundings {
-		var entityID string
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM object_types WHERE workspace_id=? AND key=? AND archived_at IS NULL`, c.WorkspaceID, grounding.EntityDefinitionKey).Scan(&entityID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return effect{}, reject("validation_failed", "grounding EntityDefinition does not exist in the workspace")
-			}
-			return effect{}, err
-		}
-		groundings = append(groundings, resolvedGrounding{entityID: entityID, predicate: grounding.Predicate, mapping: canonical(grounding.Mapping)})
-	}
-	payload := map[string]any{
-		"workspace_id": c.WorkspaceID, "bundle_id": bundleID, "concept_id": document.ConceptID,
-		"concept_type": document.ConceptType, "title": document.Title, "description": document.Description,
-		"resource": document.Resource, "body_markdown": document.BodyMarkdown,
-		"revision_id": document.ContentHash, "content_hash": document.ContentHash, "operation": "accepted",
-	}
-	var existingHash string
-	if err := tx.QueryRowContext(ctx, `SELECT content_hash FROM knowledge_documents WHERE workspace_id=? AND bundle_id=? AND concept_id=?`, c.WorkspaceID, bundleID, document.ConceptID).Scan(&existingHash); err == nil && existingHash == document.ContentHash {
-		return makeEffect(bundleID+":"+document.ConceptID, "knowledge_document", 1, "knowledge.accepted", payload), nil
-	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return effect{}, err
-	}
-
-	ts := timestamp(now)
-	_, err = tx.ExecContext(ctx, `INSERT INTO knowledge_documents(
-		workspace_id,bundle_id,concept_id,concept_type,title,description,resource,frontmatter_json,
-		body_markdown,source_markdown,content_hash,created_at,updated_at,created_by_principal_id,updated_by_principal_id
-	) VALUES(?,?,?,?,NULLIF(?,''),NULLIF(?,''),NULLIF(?,''),?,?,?,?,?,?,?,?)
-	ON CONFLICT(workspace_id,bundle_id,concept_id) DO UPDATE SET
-		concept_type=excluded.concept_type,title=excluded.title,description=excluded.description,resource=excluded.resource,
-		frontmatter_json=excluded.frontmatter_json,body_markdown=excluded.body_markdown,source_markdown=excluded.source_markdown,
-		content_hash=excluded.content_hash,updated_at=excluded.updated_at,updated_by_principal_id=excluded.updated_by_principal_id`,
-		c.WorkspaceID, bundleID, document.ConceptID, document.ConceptType, document.Title, document.Description, document.Resource,
-		document.FrontmatterJSON, document.BodyMarkdown, document.SourceMarkdown, document.ContentHash, ts, ts, principal, principal)
-	if err != nil {
-		return effect{}, mapSQLError(err)
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM knowledge_relations WHERE workspace_id=? AND bundle_id=? AND source_concept_id=?`, c.WorkspaceID, bundleID, document.ConceptID); err != nil {
-		return effect{}, err
-	}
-	for _, relation := range document.Relations {
-		external := 0
-		if relation.TargetIsExternal {
-			external = 1
-		}
-		metadata := relation.Metadata
-		if metadata == nil {
-			metadata = map[string]any{}
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO knowledge_relations(workspace_id,bundle_id,source_concept_id,kind,predicate,target_ref,target_is_external,cardinality,metadata_json)
-			VALUES(?,?,?,?,?,?,?,NULLIF(?,''),?) ON CONFLICT(workspace_id,bundle_id,source_concept_id,kind,predicate,target_ref)
-			DO UPDATE SET target_is_external=excluded.target_is_external,cardinality=excluded.cardinality,metadata_json=excluded.metadata_json`,
-			c.WorkspaceID, bundleID, document.ConceptID, relation.Kind, relation.Predicate, relation.TargetRef, external, relation.Cardinality, canonical(metadata)); err != nil {
-			return effect{}, err
-		}
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM ontology_groundings WHERE workspace_id=? AND bundle_id=? AND concept_id=?`, c.WorkspaceID, bundleID, document.ConceptID); err != nil {
-		return effect{}, err
-	}
-	for _, grounding := range groundings {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO ontology_groundings VALUES(?,?,?,?,?,?,?,?)`, c.WorkspaceID, bundleID, document.ConceptID, grounding.entityID, grounding.predicate, grounding.mapping, ts, principal); err != nil {
-			return effect{}, err
-		}
-	}
-	return makeEffect(bundleID+":"+document.ConceptID, "knowledge_document", 1, "knowledge.accepted", payload), nil
-}
-
-func removeKnowledge(ctx context.Context, tx store.Tx, c Command, p map[string]any) (effect, error) {
-	bundleID := strings.TrimSpace(p["bundle_id"].(string))
-	if !validBundleID(bundleID) {
-		return effect{}, reject("validation_failed", "payload.bundle_id must be a non-empty identifier of at most 128 characters")
-	}
-	conceptID, err := knowledge.NormalizeConceptID(strings.TrimSpace(p["concept_id"].(string)) + ".md")
-	if err != nil {
-		return effect{}, reject("validation_failed", "payload.concept_id is invalid")
-	}
-	var contentHash string
-	if err := tx.QueryRowContext(ctx, `SELECT content_hash FROM knowledge_documents WHERE workspace_id=? AND bundle_id=? AND concept_id=?`, c.WorkspaceID, bundleID, conceptID).Scan(&contentHash); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return effect{}, reject("validation_failed", "knowledge document does not exist")
-		}
-		return effect{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM knowledge_documents WHERE workspace_id=? AND bundle_id=? AND concept_id=?`, c.WorkspaceID, bundleID, conceptID); err != nil {
-		return effect{}, err
-	}
-	payload := map[string]any{"workspace_id": c.WorkspaceID, "bundle_id": bundleID, "concept_id": conceptID, "content_hash": contentHash, "tombstone_id": c.CommandID, "operation": "removed"}
-	return makeEffect(bundleID+":"+conceptID, "knowledge_document", 1, "knowledge.removed", payload), nil
 }
 
 func validBundleID(value string) bool {

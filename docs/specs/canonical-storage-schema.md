@@ -72,19 +72,20 @@ This section is a reader map, not a schema table.
 - `spec_revisions` stores bounded-kind immutable Task, Function, Workflow,
   AgentDefinition (`participant`), Domain Event and Ontology revisions.
 - `journal_records` stores append-only work, routing, function invocation,
-  Workflow, Domain Event, Knowledge proposal/review, submission and completion
+  Workflow, Domain Event, submission and completion
   facts. TaskRun, Assignment, Handoff, FunctionRun and WorkflowRun are
   projections, not mutable canonical rows.
 - Adapter inbound events and ReactiveRule evaluations are canonical evidence, not
   business aggregate commits.
-- `knowledge_documents` stores the exact accepted OKF source and its parsed
-  current snapshot. `knowledge_relations` stores Markdown links and formal
-  Ontology edges; `ontology_groundings` maps Concepts many-to-many to existing
-  `object_types` EntityDefinitions. Full-text search is a rebuildable external
-  Meilisearch projection and is not canonical storage.
-- Rhiza Graph is not a second canonical business store. It contains a
-  rebuildable Concept reachability projection derived from canonical SQL and
-  is not dual-written in the Kernel transaction.
+- Knowledge is externally owned. Fresh schemas omit `knowledge_documents`,
+  `knowledge_relations` and `ontology_groundings`. Opening a v3 database atomically
+  drops these three dedicated tables (children first, with foreign keys enabled)
+  and advances schema identity to v4. This intentionally deletes their contents.
+  Shared spec, Journal, command and projection history is preserved, including
+  historical Knowledge kinds and Ontology revisions. Other identities are rejected.
+  Logical exports declare the retired tables as excluded; imports reject exports
+  that still include them. Existing graph artifacts are left untouched.
+  Full-text object search is a rebuildable Meilisearch view.
 
 ## Invariants
 
