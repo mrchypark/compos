@@ -1,3 +1,5 @@
+# WARNING: The Compos API is unauthenticated. This manifest does not enforce
+# a trusted network boundary; see README.md before deploying or exposing it.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -32,7 +34,7 @@ metadata:
   namespace: compos-conductor
   labels:
     app.kubernetes.io/name: compos
-    app.kubernetes.io/version: rhiza-0.19.0
+    app.kubernetes.io/version: rhiza-0.24.0
 spec:
   replicas: 1
   strategy:
@@ -45,7 +47,7 @@ spec:
       labels:
         app.kubernetes.io/name: compos
         app.kubernetes.io/part-of: compos-conductor
-        app.kubernetes.io/version: rhiza-0.19.0
+        app.kubernetes.io/version: rhiza-0.24.0
     spec:
       serviceAccountName: compos-rhiza-gcs
       automountServiceAccountToken: false

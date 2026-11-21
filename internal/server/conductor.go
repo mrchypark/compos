@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -21,14 +20,13 @@ import (
 	"github.com/mrchypark/rhiza"
 )
 
-func (s *Server) EnableConductor(baseURL, token, callbackToken string) error {
+func (s *Server) EnableConductor(baseURL, token string) error {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return errors.New("conductor URL must be an absolute HTTP(S) URL")
 	}
 	s.conductorURL = strings.TrimRight(parsed.String(), "/")
 	s.conductorToken = token
-	s.conductorCallbackToken = callbackToken
 	s.conductorClient = &http.Client{Timeout: 30 * time.Second}
 	s.conductorWake = make(chan struct{}, 1)
 	s.conductorDone = make(chan struct{})
@@ -59,14 +57,6 @@ type conductorCallback struct {
 }
 
 func (s *Server) appendConductorCallback(w http.ResponseWriter, r *http.Request) {
-	if s.conductorCallbackToken == "" {
-		problem(w, http.StatusServiceUnavailable, "conductor_callback_unavailable", "configuration", true, "Conductor callback token is not configured")
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.conductorCallbackToken)) != 1 {
-		problem(w, http.StatusUnauthorized, "unauthorized", "authn", false, "invalid Conductor callback token")
-		return
-	}
 	var callback conductorCallback
 	if !decodeLimit(w, r, &callback, 8<<20) {
 		return
@@ -313,14 +303,6 @@ func stringValueAny(value any) string {
 }
 
 func (s *Server) authorizeConductor(w http.ResponseWriter, r *http.Request) (string, bool) {
-	if s.conductorToken == "" {
-		problem(w, http.StatusServiceUnavailable, "conductor_unavailable", "configuration", true, "Conductor service token is not configured")
-		return "", false
-	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.conductorToken)) != 1 {
-		problem(w, http.StatusUnauthorized, "unauthorized", "authn", false, "invalid Conductor service token")
-		return "", false
-	}
 	workspaceID := strings.TrimSpace(r.Header.Get("X-Conductor-Workspace-Id"))
 	if workspaceID == "" {
 		problem(w, http.StatusBadRequest, "validation_failed", "request", false, "X-Conductor-Workspace-Id is required")

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/mrchypark/compos/internal/kernel"
@@ -70,19 +69,12 @@ func TestObjectRelationReadsHonorDirectionDefinitionAndWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	crossWorkspace := authRequest(t, handler, http.MethodGet, "/api/v1/workspaces/wks_other/objects/"+quote.Aggregate.ID+"/relations", token, nil)
-	if crossWorkspace.Code != http.StatusForbidden {
+	if crossWorkspace.Code != http.StatusNotFound {
 		t.Fatalf("cross-workspace relation read status=%d body=%s", crossWorkspace.Code, crossWorkspace.Body.String())
 	}
 }
 
 func definitionReadAuthToken(t *testing.T, db *store.Store, handler *Server) string {
 	t.Helper()
-	token := "definition-read-session"
-	handler.authority = testAuthority{request: func(r *http.Request) (string, error) {
-		if bearerToken(r) != token || strings.Contains(r.URL.Path, "wks_other") {
-			return "", errTestAuthorityDenied
-		}
-		return "dev", nil
-	}}
-	return token
+	return ""
 }

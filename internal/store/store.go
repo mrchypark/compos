@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	SchemaIdentity = "compos-go-sqlite-external-authority-v5"
+	SchemaIdentity = "compos-go-sqlite-authless-v7"
 )
 
 //go:embed schema.sql

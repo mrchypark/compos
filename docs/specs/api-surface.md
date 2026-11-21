@@ -11,10 +11,9 @@ The Kernel command execution endpoint is:
 POST /api/v1/kernel/commands
 ```
 
-CLI writes must not call that endpoint before local durability. CLI writes
-first append the command intent to the embedded local request ledger, then
-submit the command to the Compos server. The server command endpoint does not
-publish a second command log; no S2 audit synchronization command remains.
+API clients submit command intents to the Compos server. The server command
+endpoint does not publish a second command log; no S2 audit synchronization
+command remains.
 
 Every mutation requires:
 
@@ -52,7 +51,7 @@ Canonical object and projection read responses declare consistency:
 - `canonical_linearizable`
 - `canonical_stale_bounded`
 
-CLI reads use canonical server endpoints. Mutations are still revalidated by the
+Reads use canonical server endpoints. Mutations are still revalidated by the
 Kernel.
 
 Human inboxes and work streams are read through

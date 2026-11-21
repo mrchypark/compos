@@ -9,7 +9,7 @@
 
 이 문서는 ReactiveRule의 정의·활성화·평가·명령 발행, adapter inbound 저장, Conductor 실행 요청 전송과 결과 환원, Agent 배정, Workflow 재생을 설명한다. 정본은 현재 작업 트리의 Go 코드와 SQL 스키마다. 기존 설계 문서와 삭제 중인 Knowledge 구현은 현재 기능의 근거로 사용하지 않는다.
 
-Work 시작·제출·취소·완료의 일반 계약, Task 정의, 데이터 바인딩과 객체 변경은 [정의·Work 문서](./02-definitions-work.md)에서 설명한다. 이 문서는 그 경계를 넘나드는 호출과 결과만 다룬다. 외부 identity·command 승인의 공통 계약은 [인증·권한 문서](./03-auth-permissions.md)와 함께 읽는다.
+Work 시작·제출·취소·완료의 일반 계약, Task 정의, 데이터 바인딩과 객체 변경은 [정의·Work 문서](./02-definitions-work.md)에서 설명한다. 이 문서는 그 경계를 넘나드는 호출과 결과만 다룬다. HTTP 요청의 고정 `local` attribution은 [공통 실행 문서](./00-overview.md)를 따른다.
 
 Compos가 외부 Agent나 connector 코드를 실행하는 것은 아니다. 외부 실행에는 outbox와 Conductor를 사용하고, composite Function은 Compos의 Workflow scheduler가 재생한다. 근거: [외부 Function 요청](../../internal/kernel/work.go#L1399), [Agent 요청](../../internal/kernel/work.go#L1020), [Workflow scheduler](../../internal/server/workflow.go#L121).
 
@@ -30,11 +30,11 @@ Rule revision의 SQL UPDATE는 최초 `published_at: NULL → 값` 변경만 허
 
 ## 3. ReactiveRule 명령 계약
 
-### 3.1 공통 입력과 권한
+### 3.1 공통 입력과 local attribution
 
-규칙 명령은 Kernel command envelope의 `command_id`, `idempotency_key`, `workspace_id`, `command_type`, `target`, `preconditions`, `payload`, `causation`을 사용한다. `target.aggregate_type=reactive_rule`이다. define은 aggregate ID가 null이어야 하고 나머지는 ID와 `reactive_rule` version precondition이 필요하다. 명령 멱등성 범위는 workspace·인증 principal·idempotency key다. [registry](../../internal/kernel/registry.go#L48), [envelope 타입](../../internal/kernel/types.go#L1).
+규칙 명령은 Kernel command envelope의 `command_id`, `idempotency_key`, `workspace_id`, `command_type`, `target`, `preconditions`, `payload`, `causation`을 사용한다. `target.aggregate_type=reactive_rule`이다. define은 aggregate ID가 null이어야 하고 나머지는 ID와 `reactive_rule` version precondition이 필요하다. 명령 멱등성 범위는 workspace·principal attribution·idempotency key다. [registry](../../internal/kernel/registry.go#L48), [envelope 타입](../../internal/kernel/types.go#L1).
 
-규칙 명령도 외부 AuthorizeCommand의 전체 명령 승인과 actor 일치 검사를 받는다. 자체 membership·capability 및 공통 생성자 권한 검사는 제거되었다. 규칙 생성이 외부 서비스 위임을 발급하지 않으며 Grant human voter로 automation을 허용한다고 가정하지 않는다. [외부 승인](../../internal/kernel/authority.go#L10)
+규칙 명령은 credential 없는 공개 HTTP command로 제출할 수 있으며 요청 principal은 `local`이다. 별도 command 허가나 workspace permission 검사는 없다. 규칙 생성이나 저장된 principal은 외부 서비스 위임을 발급하지 않는다. [principal](../../internal/server/server.go#L1038), [command 경로](../../internal/server/server.go#L361)
 
 ### 3.2 명령별 결과
 
@@ -55,7 +55,7 @@ lifecycle 변경은 version을 증가시킨다. publish·disable·retire 구현�
 | 기본 문자열 | `automation_id/rule_key/name`은 trim 후 비어 있으면 안 된다. |
 | `requested_actor` | 키는 `type/id`만 허용한다. `{type:"automation", id:automation_id}`여야 한다. |
 | `trigger` | 키는 `source/event_type/event_schema_version/aggregate_type/allowed_causation_sources/excluded_automation_ids`만 허용한다. `source=kernel_canonical_event`, schema version은 정수 1이다. aggregate type을 주면 비어 있지 않은 문자열이어야 한다. |
-| source 목록 | 두 목록은 각각 최대 64개이며 빈 배열을 허용한다. 원소는 비어 있지 않은 문자열이다. 허용 causation source는 `cli/api/automation/adapter_reducer`다. `workflow/scheduler`는 이 목록에 직접 넣을 수 없다. 빈 allowed 목록은 평가 시 source 필터를 적용하지 않는다. |
+| source 목록 | 두 목록은 각각 최대 64개이며 빈 배열을 허용한다. 원소는 비어 있지 않은 문자열이다. 허용 causation source는 `api/automation/adapter_reducer`다. `workflow/scheduler`는 이 목록에 직접 넣을 수 없다. 빈 allowed 목록은 평가 시 source 필터를 적용하지 않는다. |
 | 제외 목록 | automation ID와 `self`를 사용할 수 있다. `self`는 이벤트의 automation ID가 해당 규칙의 automation ID와 같을 때 제외한다. |
 | `action` | 키는 `action_id/kind/command_type/target_template/payload_template/preconditions_template`만 허용한다. `kind=emit_command`, action ID는 비어 있으면 안 된다. target·payload는 object, preconditions는 array다. |
 | action allowlist | 현재는 `object.create`, `object.move`, `relation.link`만 허용한다. Function 실행을 ReactiveRule action으로 허용하지 않는다. |
@@ -86,11 +86,11 @@ Template도 각각 64 KiB와 깊이 32 제한을 받는다. literal object·arra
 
 근거: [후보 조회](../../internal/server/reactive_rule.go#L39), [평가](../../internal/server/reactive_rule.go#L80), [저장](../../internal/server/reactive_rule.go#L140).
 
-### 4.2 결정적인 ID와 실제 권한 검사
+### 4.2 결정적인 ID와 실제 actor 경계
 
 SHA-256은 소문자 hex를 사용한다. evaluation ID는 `aev_`와 `workspace:revision:event:action` hash 앞 32자를 결합한다. command ID는 `cmd_automation_`와 evaluation ID hash 앞 24자다. namespace는 `workspace/automation/revision/action`, key는 `automation:<automation>:<revision>:<event>:<action>`이다. 생성 command의 actor는 automation이며 causation에는 source `automation`, triggering event ID, automation ID, revision ID, recursion depth를 넣는다. 렌더링한 전체 command의 hash도 저장한다. [ID와 envelope 구성](../../internal/server/reactive_rule.go#L103).
 
-발행은 revision 생성 principal을 사용해 kernel.Execute를 호출하지만 저장된 principal은 외부 위임 근거가 아니다. 외부 AuthorizeCommand가 없거나 거부하면 dispatch도 실패한다. 서비스 계약과 adapter는 아직 없으므로 operational automation 인가를 주장하지 않는다. [dispatch](../../internal/server/reactive_rule.go#L179), [승인 경계](../../internal/kernel/authority.go#L10)
+발행은 revision 생성 principal과 requested automation actor를 일반 `Execute`에 전달한다. actor는 감사 attribution이며 접근 허가가 아니다. 저장된 principal만으로 서비스 위임을 주장하지 않는다. [dispatch](../../internal/server/reactive_rule.go#L184), [actor 해석](../../internal/kernel/actor.go#L5)
 
 ### 4.3 제한·재시도·회로의 실제 단위
 
@@ -116,7 +116,7 @@ SHA-256은 소문자 hex를 사용한다. evaluation ID는 `aev_`와 `workspace:
 
 새 항목은 `ain_`+UUID, 정규화 payload·SHA-256 hash, `appended`와 UTC 수신 시각을 저장하고 202를 반환한다. 같은 workspace·adapter·event ID와 같은 payload hash는 최초 ID·수신 시각으로 200을 반환한다. 다른 hash는 409 `idempotency_conflict`다. 응답은 `data:{id,workspace_id,adapter_id,inbound_event_id,status,received_at}`다. handler는 저장된 상태를 재조회하여 응답하지 않고 status를 `appended`로 출력한다. [저장과 응답](../../internal/server/server.go#L919).
 
-inbound append도 공통 Authority.AuthorizeRequest를 먼저 통과해야 하며 dev 우회는 없다. append 경계 자체가 임의 payload를 Kernel event로 자동 환원하지 않는다. Rhiza는 기존 hash 확인·INSERT OR IGNORE·재조회로 멱등성을 처리한다. [HTTP 경계](../../internal/server/authority.go#L24)
+inbound append도 인증 gate 없이 등록된 route로 들어온다. append 경계 자체가 임의 payload를 Kernel event로 자동 환원하지 않는다. Rhiza는 기존 hash 확인·INSERT OR IGNORE·재조회로 멱등성을 처리한다. [HTTP 경계](../../internal/server/server.go#L54)
 
 ## 6. Conductor outbound 계약
 
@@ -145,9 +145,9 @@ Dispatcher는 pending callback 환원 후 outbox 전송을 수행하고 1초 tic
 
 ## 7. Conductor callback과 환원
 
-### 7.1 인증·입력·식별
+### 7.1 입력·principal·식별
 
-`POST /internal/v1/conductor/callbacks`는 공통 외부 Authority 승인을 먼저 받은 뒤 추가로 정확한 `Authorization: Bearer <callbackToken>`을 상수 시간 비교한다. 토큰 미설정은 503 `conductor_callback_unavailable`, 불일치는 401 `unauthorized`다. body 제한은 8 MiB다. [route](../../internal/server/server.go#L90), [검증](../../internal/server/conductor.go#L61).
+`POST /internal/v1/conductor/callbacks`는 Compos가 incoming credential을 검증하지 않는다. callback evidence의 invocation·handler·terminal 상태 검사는 유지한다. network 경계는 배포 gateway가 제한해야 한다. body 제한은 8 MiB다. [route](../../internal/server/server.go#L90), [검증](../../internal/server/conductor.go#L61).
 
 | 필드 | 입력 계약 |
 | --- | --- |
@@ -210,13 +210,13 @@ Route output schema는 object schema여야 한다. data binding ID는 주면 1~3
 
 Spec 발행은 참조 revision의 종류·존재와 Function↔Workflow 실행 graph의 순환을 검사한다. 이는 모델 runner의 임의 tool 호출 graph를 검증하는 기능이 아니다. [Rhiza 참조와 순환 검증](../../internal/kernel/rhiza_spec.go#L11).
 
-### 8.3 재생·권한·완료
+### 8.3 재생·actor·완료
 
 Composite Function 호출은 function.requested와 workflow.started를 같은 invocation correlation으로 기록한다. scheduler는 아직 workflow.completed/failed가 없고 Work도 satisfied/cancelled가 아닌 started 항목을 최대 100개 읽는다. 고정 Workflow revision이 없으면 실패 완료를 시도한다. 매 순회 root/current를 최초 input으로, steps를 빈 map으로 시작하고 journal에서 이미 완료한 단계를 복원한다. [composite 호출](../../internal/kernel/work.go#L1195), [재생](../../internal/server/workflow.go#L121).
 
 Workflow command ID는 `cmd_wf_`+SHA-256(`invocation + NUL + step + NUL + action`) 앞 16 bytes의 hex다. key는 `workflow:<invocation>:<step>:<action>`, causation은 source workflow와 invocation ID다. route command ID가 workflow_route_id이며 submission 조회는 step ID와 이 route ID를 함께 비교해 반복 실행 간 제출을 분리한다. child Function invocation은 `inv_`+invoke command ID에서 하이픈을 제거한 값이다. [command 생성](../../internal/server/workflow.go#L371), [submission 조회](../../internal/server/workflow.go#L419), [child ID](../../internal/server/workflow.go#L209).
 
-human 제출 후 state principal은 제출 principal로 바뀐다. invoke의 현재 참여자가 human이면 그 principal과 같아야 진행하며, agent면 service actor, automation이면 automation actor로 Kernel을 호출한다. 배정이 외부 서비스 실행 권한을 부여하지는 않는다. adapter·서비스 계약 없는 기본 실행에서는 이 명령도 거부된다. [route 처리](../../internal/server/workflow.go#L179), [actor 선택](../../internal/server/workflow.go#L384).
+human 제출 후 state principal은 제출 principal로 바뀐다. invoke의 현재 참여자가 human이면 그 principal과 같아야 진행하며, agent면 service actor, automation이면 automation actor로 Kernel을 호출한다. 배정은 외부 서비스 접근 허가를 발급하지 않는다. adapter·서비스 계약 없는 기본 실행에서는 연동 명령이 실행되지 않는다. [route 처리](../../internal/server/workflow.go#L179), [actor 선택](../../internal/server/workflow.go#L384).
 
 parallel은 이 scheduler 안에서 branch를 순서대로 순회하여 외부 실행을 요청하고 pending 여부를 모은다. 모든 branch가 준비되어야 합치며 branch 내부 principal·route 변경은 상위 state로 복사하지 않고 step output들만 합친다. Workflow 처리 중 오류는 workflow.complete 실패 요청으로, 완료 준비가 되면 성공 요청으로 간다. [parallel 실행](../../internal/server/workflow.go#L276), [완료](../../internal/server/workflow.go#L445).
 
@@ -228,7 +228,7 @@ Workflow scheduler는 매 순회 deadline → ReactiveRule → Workflow 순서�
 
 ## 9. Conductor가 읽는 Compos connector API
 
-두 GET은 정확한 service token Bearer와 `X-Conductor-Workspace-Id`를 요구한다. 토큰 미설정은 503 conductor_unavailable, 불일치는 401 unauthorized, workspace 헤더 없음은 400 validation_failed다. 공통 Authority 승인에 더해 service token과 workspace 헤더를 검사한다. 이 헤더 자체는 검증된 identity나 Grant 인가 증거가 아니다. [인증](../../internal/server/conductor.go#L313).
+두 GET은 `X-Conductor-Workspace-Id`로 읽을 workspace를 선택한다. incoming service credential 검사는 없다. workspace header 없음은 400 validation_failed다. 접근 제한은 배포 gateway가 맡는다. [connector](../../internal/server/conductor.go#L313).
 
 | API | 응답·실패 |
 | --- | --- |
@@ -248,7 +248,7 @@ Workflow scheduler는 매 순회 deadline → ReactiveRule → Workflow 순서�
 - 발행량 제한은 revision별 집계이므로 automation 전체나 workspace 전체의 공동 예산을 보장하지 않는다. 제한에 걸린 이벤트는 영구 skipped 평가로 남는다.
 - Rule dispatch와 Conductor poller는 서로 다른 실패 집계와 재시도 경로다. Rule의 failure_threshold가 외부 runner 재시도를 제한하지 않는다.
 - 회로 threshold는 실패 상태인 행들의 attempt 합이다. 렌더링 실패는 attempt 0이며 dispatch되지 않아 그 자체로 회로 체크를 호출하지 않는다.
-- 일반 inbound API는 adapter ID를 예약하거나 payload를 callback 구조로 검증하지 않는다. background Conductor reducer는 adapter ID conductor의 appended 항목을 해석하므로 전용 callback 인증 경로와 일반 append 경로를 동일한 보장으로 설명할 수 없다.
+- 일반 inbound API는 adapter ID를 예약하거나 payload를 callback 구조로 검증하지 않는다. background Conductor reducer는 adapter ID conductor의 appended 항목을 해석한다. inbound 경로는 모두 인증 gate 없이 열리므로 deployment gateway가 network 범위를 제한해야 한다.
 - callback 수렴은 새 inbound의 Work terminal 검사 뒤 수행한다. Work가 끝난 후 새 callback ID로 온 동일 결과와, 기존 reduced callback ID를 재전송한 경우는 다르게 처리된다.
 - terminal callback은 timeout·retry policy 전달과 별개다. Compos가 Conductor 실행 상태를 주기 조회하여 유실 callback을 생성하는 경로는 이 poller에 없다.
 - HTTP decode는 첫 JSON 값을 읽고 알려지지 않은 필드를 거부하지만 후속 EOF 검사를 하지 않는다. acknowledgement 전체 JSON 검증과 같은 엄격도라고 볼 수 없다.
@@ -264,12 +264,12 @@ Workflow scheduler는 매 순회 deadline → ReactiveRule → Workflow 순서�
 | --- | --- |
 | [ReactiveRule 발행·재생·회로](../../internal/server/reactive_rule_test.go#L15) | Seed 이벤트에서 follow-up이 한 번 생성되고 재평가해도 중복되지 않는지, 실패 attempt를 설정한 뒤 disabled/open이 되는지 검사한다. |
 | [다중 effect pairing](../../internal/server/reactive_rule_test.go#L89), [Rhiza pairing](../../internal/server/reactive_rule_test.go#L152) | parent command의 projection event와 activity가 올바른 aggregate로 연결되는지 검사한다. |
-| [외부 command 승인](../../internal/kernel/authority_test.go#L34) | authority 부재·거부 및 duplicate 재승인을 검사한다. 자체 lifecycle 생성자 권한 검사는 제거되었다. |
+| [actor attribution](../../internal/kernel/actor_test.go#L21) | requested actor 형식과 effective actor 기록을 검사한다. 접근 허가 판정은 없다. |
 | [허용 이벤트·action 목록](../../internal/kernel/executor_test.go#L147) | 공개 trigger와 제한된 automation action 경계를 검사한다. |
 | [Rhiza inbound 경쟁](../../internal/server/adapter_rhiza_test.go#L13) | 동시 동일 inbound의 멱등성과 payload 충돌을 검사한다. |
 | [Conductor 전송](../../internal/server/conductor_test.go#L19), [ack 오류](../../internal/server/conductor_test.go#L109) | 실행 요청만 전송하는지, malformed·누락·foreign·중복·잘못된 ID·oversize ack에서 pending이 유지되고 동일 invocation으로 재시도하는지 검사한다. |
 | [ack status](../../internal/server/conductor_test.go#L233), [Rhiza batch](../../internal/server/conductor_test.go#L254) | queued와 terminal ack를 수락하고 64개 batch로 outbox를 소진하는지 검사한다. |
-| [callback 인증·scope·멱등](../../internal/server/conductor_test.go#L343), [Rhiza 변경 callback](../../internal/server/conductor_test.go#L500) | callback 권한·workspace·중복 내용과 변경 충돌을 검사한다. |
+| [callback scope·멱등](../../internal/server/conductor_test.go#L343), [Rhiza 변경 callback](../../internal/server/conductor_test.go#L500) | callback의 workspace·중복 내용과 변경 충돌을 검사한다. |
 | [잘못된 결과의 수렴](../../internal/server/conductor_test.go#L578) | Kernel 정규화 이후에도 동일 invalid result가 terminal 한 번으로 수렴하는지 검사한다. |
 | [connector 읽기](../../internal/server/conductor_test.go#L648) | service token과 workspace 범위를 검사한다. |
 | [Agent 요청·결과](../../internal/server/agent_test.go#L12) | route outbox, 성공 제출·완료, 완료 뒤 동일 callback 재생, 새 late callback 거부, invalid output 수렴을 검사한다. |
@@ -286,11 +286,11 @@ Workflow scheduler는 매 순회 deadline → ReactiveRule → Workflow 순서�
 | 책임 | 정본 소스 |
 | --- | --- |
 | 명령 공개·payload·action/event allowlist | [registry.go](../../internal/kernel/registry.go#L29) |
-| 규칙 정의·권한·lifecycle·archive | [executor.go](../../internal/kernel/executor.go#L716), [rhiza.go](../../internal/kernel/rhiza.go#L104) |
+| 규칙 정의·lifecycle·archive | [executor.go](../../internal/kernel/executor.go#L716), [rhiza.go](../../internal/kernel/rhiza.go#L104) |
 | predicate·template 정적 제한 | [expression.go](../../internal/reactiverule/expression.go#L12) |
 | 규칙 평가·dispatch·회로·template runtime | [reactive_rule.go](../../internal/server/reactive_rule.go#L26) |
 | HTTP route·inbound·decode | [server.go](../../internal/server/server.go#L89), [inbound](../../internal/server/server.go#L890), [decode](../../internal/server/server.go#L978) |
-| 외부 요청 승인 경계 | [authority.go](../../internal/server/authority.go#L11) |
+| 요청 principal·HTTP 경계 | [server.go](../../internal/server/server.go#L54) |
 | Conductor callback·outbox·connector 읽기 | [conductor.go](../../internal/server/conductor.go#L24) |
 | Workflow scheduler·step 재생 | [workflow.go](../../internal/server/workflow.go#L38) |
 | Agent·Workflow spec·정책·외부 실행 결과 | [work.go](../../internal/kernel/work.go#L232), [외부 요청](../../internal/kernel/work.go#L1399) |

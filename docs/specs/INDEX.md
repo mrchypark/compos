@@ -19,9 +19,8 @@ Read in this order:
 9. [api-surface.md](api-surface.md)
 10. [authz-principal-actor-contract.md](authz-principal-actor-contract.md)
 11. [reactive-rule-adapter-boundary.md](reactive-rule-adapter-boundary.md)
-12. [go-cli-ledger.md](go-cli-ledger.md)
-13. [storage-ddl.md](storage-ddl.md)
-14. [http-api-contract.md](http-api-contract.md)
+12. [storage-ddl.md](storage-ddl.md)
+13. [http-api-contract.md](http-api-contract.md)
 
 Implementation sequencing is tracked in the
 [Constitutional Architecture Implementation Plan](../plans/constitutional-architecture-implementation.md).

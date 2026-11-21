@@ -38,14 +38,14 @@ jobs:
           mkdir -p release-results
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           printf '%s\n' "$GITHUB_SHA" > release-results/source-sha.txt
-          printf '%s\n' 'Real provider authority integration is not covered.' \
-            'Storage gates require real archive/fresh-disk ACK, replay, and provider fencing tests.' \
+          printf '%s\n' 'Upstream authentication gateway integration is not covered.' \
+            'Storage gates require real eventual archive recovery, replay, and provider fencing tests; async writes can be lost before archival.' \
             > release-results/coverage.txt
       - uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go tests including typed queries and test-only authority
+      - name: Go tests including typed queries and credential-free HTTP
         run: go test -json -count=1 -timeout=20m ./... > release-results/go-tests.jsonl 2>&1
       - name: Required single-node archive recovery and provider fencing
         run: sh scripts/release/storage-gate.sh release-results
@@ -87,7 +87,7 @@ jobs:
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --tag "$SERVER_IMAGE" --metadata-file release-results/build.json .
           docker image inspect "$SERVER_IMAGE" > release-results/image.json
-      - name: Health and unavailable-authority image smoke
+      - name: Health, workspace and Person image smoke
         run: sh scripts/release/server-smoke.sh "$SERVER_IMAGE" release-results
       - name: Login to GHCR
         if: inputs.publish && needs.verify.result == 'success'

@@ -8,6 +8,23 @@ import (
 	"github.com/mrchypark/rhiza"
 )
 
+func TestTopologyLabel(t *testing.T) {
+	for _, test := range []struct {
+		storage string
+		members int
+		want    string
+	}{
+		{"sqlite", 0, "standalone/sqlite"},
+		{"rhiza", 0, "standalone/rhiza"},
+		{"rhiza", 1, "standalone/rhiza"},
+		{"rhiza", 2, "ha/rhiza"},
+	} {
+		if got := topologyLabel(test.storage, test.members); got != test.want {
+			t.Fatalf("%s/%d = %q, want %q", test.storage, test.members, got, test.want)
+		}
+	}
+}
+
 func TestRhizaMembersDerivePublicKeysFromPeerTokens(t *testing.T) {
 	members, token, err := rhizaMembers(`[{"node_id":"n1","peer_url":"quic://n1"},{"node_id":"n2","peer_url":"quic://n2"}]`, `{"n1":"token-1","n2":"token-2"}`, "cluster", "n2", "")
 	if err != nil || token != "token-2" {

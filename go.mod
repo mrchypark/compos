@@ -1,14 +1,13 @@
 module github.com/mrchypark/compos
 
-go 1.27.0
+go 1.27.4
 
 require (
 	github.com/google/uuid v1.6.0
 	github.com/meilisearch/meilisearch-go v0.36.3
 	github.com/minio/minio-go/v7 v7.0.95
-	github.com/mrchypark/rhiza v0.19.0
+	github.com/mrchypark/rhiza v0.27.3
 	github.com/ncruces/go-sqlite3 v0.35.3
-	go.etcd.io/bbolt v1.5.0
 )
 
 require (
@@ -52,7 +51,7 @@ require (
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
 	github.com/go-kit/log v0.2.1 // indirect
 	github.com/go-logfmt/logfmt v0.5.1 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
@@ -70,7 +69,7 @@ require (
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/minio/crc64nvme v1.0.2 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
-	github.com/mrchypark/latticedb-go v0.11.3 // indirect
+	github.com/mrchypark/latticedb-go v0.13.0 // indirect
 	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35304 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
@@ -87,21 +86,23 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.8.1 // indirect
 	github.com/thanos-io/objstore v0.0.0-20260817070452-e42d91c337ee // indirect
 	github.com/tinylib/msgp v1.3.0 // indirect
+	go.etcd.io/bbolt v1.5.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.44.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
-	go.opentelemetry.io/otel v1.45.0 // indirect
-	go.opentelemetry.io/otel/metric v1.45.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.45.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.45.0 // indirect
-	go.opentelemetry.io/otel/trace v1.45.0 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	go.opentelemetry.io/otel v1.47.0 // indirect
+	go.opentelemetry.io/otel/log v1.47.0 // indirect
+	go.opentelemetry.io/otel/metric v1.47.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.47.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.47.0 // indirect
+	go.opentelemetry.io/otel/trace v1.47.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/api v0.264.0 // indirect
 	google.golang.org/genproto v0.0.0-20260128011058-8636f8732409 // indirect

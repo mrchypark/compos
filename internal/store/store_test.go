@@ -24,7 +24,7 @@ func TestOpenInitializesStrictSchemaAndEveryConnectionUsesForeignKeys(t *testing
 	if identity != SchemaIdentity {
 		t.Fatalf("identity = %q", identity)
 	}
-	for _, table := range []string{"workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities", "principal_person_bindings", "person_binding_claims", "knowledge_documents", "knowledge_relations", "ontology_groundings"} {
+	for _, table := range []string{"workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities", "person_binding_claims", "knowledge_documents", "knowledge_relations", "ontology_groundings"} {
 		var count int
 		if err := store.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("retired table %s count=%d err=%v", table, count, err)

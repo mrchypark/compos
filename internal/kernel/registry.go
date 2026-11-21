@@ -13,7 +13,6 @@ type Definition struct {
 	AllowedTargetAggregateTypes []string       `json:"allowed_target_aggregate_types"`
 	TargetAggregateID           string         `json:"target_aggregate_id"`
 	RequiredPreconditions       []string       `json:"required_preconditions"`
-	AuthorizationPolicy         string         `json:"authorization_policy"`
 	IdempotencyBehavior         string         `json:"idempotency_behavior"`
 	AutomationActionAllowed     bool           `json:"automation_action_allowed"`
 	EmittedEvents               []string       `json:"emitted_events"`
@@ -75,7 +74,7 @@ func def(name, summary, aggregate string, targetID bool, preconditions, required
 	if targetID {
 		target = "required"
 	}
-	return Definition{WireName: name, Summary: summary, PayloadSchema: schema(required, properties), AllowedTargetAggregateTypes: []string{aggregate}, TargetAggregateID: target, RequiredPreconditions: preconditions, AuthorizationPolicy: "workspace member", IdempotencyBehavior: "workspace + authenticated principal + idempotency key", AutomationActionAllowed: name == "object.create" || name == "object.move" || name == "relation.link", EmittedEvents: []string{event}}
+	return Definition{WireName: name, Summary: summary, PayloadSchema: schema(required, properties), AllowedTargetAggregateTypes: []string{aggregate}, TargetAggregateID: target, RequiredPreconditions: preconditions, IdempotencyBehavior: "workspace + authenticated principal + idempotency key", AutomationActionAllowed: name == "object.create" || name == "object.move" || name == "relation.link", EmittedEvents: []string{event}}
 }
 
 func Registry() []Definition {

@@ -8,7 +8,7 @@ import (
 
 func TestCausationUsesAttemptIdentity(t *testing.T) {
 	var causation Causation
-	if err := json.Unmarshal([]byte(`{"source":"cli","attempt_id":"attempt_1"}`), &causation); err != nil {
+	if err := json.Unmarshal([]byte(`{"source":"api","attempt_id":"attempt_1"}`), &causation); err != nil {
 		t.Fatal(err)
 	}
 	if causation.AttemptID == nil || *causation.AttemptID != "attempt_1" {
@@ -22,7 +22,7 @@ func TestCausationUsesAttemptIdentity(t *testing.T) {
 		t.Fatalf("unexpected causation contract: %s", encoded)
 	}
 	var legacy Causation
-	if err := json.Unmarshal([]byte(`{"source":"cli","audit_id":"audit_1"}`), &legacy); err != nil {
+	if err := json.Unmarshal([]byte(`{"source":"api","audit_id":"audit_1"}`), &legacy); err != nil {
 		t.Fatal(err)
 	}
 	if legacy.AttemptID != nil {

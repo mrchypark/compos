@@ -19,15 +19,14 @@ import (
 )
 
 type Executor struct {
-	AuthorizeCommand CommandAuthorizer
-	transact         func(context.Context, string, func(store.Tx) error) error
-	store            *store.Store
-	now              func() time.Time
-	rhizaCommit      func(context.Context, string, Actor, Command, []rhiza.SQLStatement, effect, string) (Receipt, error)
-	rhizaSecondary   []effect
-	workObjects      map[string]*workPendingObject
-	workSequences    *workSequenceReservations
-	workResults      map[string]WorkChangeResult
+	transact       func(context.Context, string, func(store.Tx) error) error
+	store          *store.Store
+	now            func() time.Time
+	rhizaCommit    func(context.Context, string, Actor, Command, []rhiza.SQLStatement, effect, string) (Receipt, error)
+	rhizaSecondary []effect
+	workObjects    map[string]*workPendingObject
+	workSequences  *workSequenceReservations
+	workResults    map[string]WorkChangeResult
 }
 
 func NewExecutor(db *sql.DB) *Executor {
@@ -58,21 +57,32 @@ type effect struct {
 }
 
 func (e *Executor) Execute(ctx context.Context, principal string, c Command) (Receipt, error) {
-	if err := ValidateCommand(c); err != nil {
+	if err := validateExecution(principal, c); err != nil {
 		return Receipt{}, err
+	}
+	actor, err := resolveActor(principal, c)
+	if err != nil {
+		return Receipt{}, err
+	}
+	return e.execute(ctx, principal, actor, c)
+}
+
+func validateExecution(principal string, c Command) error {
+	if err := ValidateCommand(c); err != nil {
+		return err
 	}
 	if principal == "" {
-		return Receipt{}, reject("forbidden", "authenticated principal is required")
+		return reject("unauthenticated", "authenticated principal is required")
 	}
 	if (c.CommandType == "function.record_result" || c.CommandType == "agent.record_result") && c.Causation.Source != "adapter_reducer" {
-		return Receipt{}, reject("forbidden", "external runtime result commands require adapter_reducer causation")
+		return reject("forbidden", "external runtime result commands require adapter_reducer causation")
 	}
-	ctx = context.WithValue(ctx, commandAuthorizerKey{}, e.AuthorizeCommand)
-	if _, err := authorize(ctx, nil, principal, c); err != nil {
-		return Receipt{}, err
-	}
+	return nil
+}
+
+func (e *Executor) execute(ctx context.Context, principal string, actor Actor, c Command) (Receipt, error) {
 	if e.store != nil && e.store.Kind() == "rhiza" {
-		return e.executeRhiza(ctx, principal, c)
+		return e.executeRhiza(ctx, principal, actor, c)
 	}
 	now := e.now().UTC()
 	payloadHash := digestJSON(c.Payload)
@@ -89,10 +99,6 @@ func (e *Executor) Execute(ctx context.Context, principal string, c Command) (Re
 			}
 			return err
 		}
-		effectiveActor, err := authorize(ctx, tx, principal, c)
-		if err != nil {
-			return err
-		}
 		if err := checkPreconditions(ctx, tx, c); err != nil {
 			return err
 		}
@@ -102,7 +108,8 @@ func (e *Executor) Execute(ctx context.Context, principal string, c Command) (Re
 				return err
 			}
 			if _, present := payload["changes"]; present {
-				receipt, err = e.submitWorkChanges(ctx, tx, principal, effectiveActor, c, payloadHash, payload, now)
+				var err error
+				receipt, err = e.submitWorkChanges(ctx, tx, principal, actor, c, payloadHash, payload, now)
 				return err
 			}
 		}
@@ -116,14 +123,14 @@ func (e *Executor) Execute(ctx context.Context, principal string, c Command) (Re
 		}
 		version := effect.aggregate.Version
 		receipt = Receipt{CommandID: c.CommandID, Outcome: "applied", Aggregate: &effect.aggregate, AggregateVersion: &version, WorkspaceID: &c.WorkspaceID, ProjectionSequence: &sequence}
-		return record(ctx, tx, principal, effectiveActor, c, payloadHash, now, sequence, receipt, effect)
+		return record(ctx, tx, principal, actor, c, payloadHash, now, sequence, receipt, effect)
 	})
 	return receipt, err
 }
 
 func duplicateReceipt(ctx context.Context, tx store.Tx, principal string, c Command, payloadHash string) (Receipt, bool, error) {
 	var commandID, commandType, storedHash, target, preconditions, causation, requested, result string
-	err := tx.QueryRowContext(ctx, `SELECT command_id,command_type,payload_hash,target_json,preconditions_json,causation_json,requested_actor_json,result_json FROM command_ledger WHERE workspace_id=? AND authenticated_principal_id=? AND idempotency_key=?`, c.WorkspaceID, principal, c.IdempotencyKey).Scan(&commandID, &commandType, &storedHash, &target, &preconditions, &causation, &requested, &result)
+	err := tx.QueryRowContext(ctx, `SELECT command_id,command_type,payload_hash,target_json,preconditions_json,causation_json,requested_actor_json,result_json FROM command_ledger WHERE workspace_id=? AND principal_id=? AND idempotency_key=?`, c.WorkspaceID, principal, c.IdempotencyKey).Scan(&commandID, &commandType, &storedHash, &target, &preconditions, &causation, &requested, &result)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Receipt{}, false, nil
 	}
@@ -737,7 +744,7 @@ func defineAutomation(ctx context.Context, tx store.Tx, principal string, c Comm
 	if err != nil {
 		return effect{}, mapSQLError(err)
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO reactive_rule_revisions(id,workspace_id,rule_id,automation_id,definition_schema_version,definition_hash,requested_actor_json,permission_policy,trigger_json,predicates_json,action_json,idempotency_json,limits_json,created_at,created_by_principal_id) VALUES(?,?,?,?,1,?,?,'owner_principal',?,?,?,?,?,?,?)`, revision, c.WorkspaceID, id, p["automation_id"], hash, actor, canonical(p["trigger"]), canonical(p["predicates"]), canonical(p["action"]), canonical(p["idempotency"]), canonical(p["limits"]), ts, principal)
+	_, err = tx.ExecContext(ctx, `INSERT INTO reactive_rule_revisions(id,workspace_id,rule_id,automation_id,definition_schema_version,definition_hash,requested_actor_json,trigger_json,predicates_json,action_json,idempotency_json,limits_json,created_at,created_by_principal_id) VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?)`, revision, c.WorkspaceID, id, p["automation_id"], hash, actor, canonical(p["trigger"]), canonical(p["predicates"]), canonical(p["action"]), canonical(p["idempotency"]), canonical(p["limits"]), ts, principal)
 	if err != nil {
 		return effect{}, err
 	}
@@ -754,7 +761,7 @@ func validateAutomationStringList(name string, value any) error {
 		if !ok || strings.TrimSpace(text) == "" {
 			return reject("schema_mismatch", "automation trigger "+name+" must contain non-empty strings")
 		}
-		if name == "allowed_causation_sources" && !map[string]bool{"cli": true, "api": true, "automation": true, "adapter_reducer": true}[text] {
+		if name == "allowed_causation_sources" && !map[string]bool{"api": true, "automation": true, "adapter_reducer": true}[text] {
 			return reject("schema_mismatch", "automation trigger allowed_causation_sources contains an unsupported source")
 		}
 	}

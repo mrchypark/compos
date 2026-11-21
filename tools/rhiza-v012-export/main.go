@@ -476,7 +476,7 @@ func writeJSON(w io.Writer, value any) error {
 func shouldSkip(name string) bool {
 	switch name {
 	case "schema_metadata", "object_type_templates", "knowledge_documents", "knowledge_relations", "ontology_groundings",
-		"workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities", "principal_person_bindings", "person_binding_claims":
+		"workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities":
 		return true
 	}
 	return strings.HasPrefix(name, "_rhiza_") || strings.HasPrefix(name, "sqlite_")

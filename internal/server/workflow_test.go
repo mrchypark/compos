@@ -317,7 +317,7 @@ func TestWorkflowRouteUsesPinnedSchemaAndSubmittingHumanForNextInvoke(t *testing
 	if err := s.DB().QueryRow(`SELECT correlation_id FROM journal_records WHERE stream_id=? AND kind='workflow.started'`, workID).Scan(&invocationID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DB().QueryRow(`SELECT authenticated_principal_id FROM command_ledger WHERE command_id=?`, workflowCommandID(invocationID, "use-review", "invoke")).Scan(&invokePrincipal); err != nil || invokePrincipal != "reviewer" {
+	if err := s.DB().QueryRow(`SELECT principal_id FROM command_ledger WHERE command_id=?`, workflowCommandID(invocationID, "use-review", "invoke")).Scan(&invokePrincipal); err != nil || invokePrincipal != "reviewer" {
 		t.Fatalf("next invoke principal=%q err=%v", invokePrincipal, err)
 	}
 }

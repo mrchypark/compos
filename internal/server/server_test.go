@@ -67,6 +67,10 @@ func TestHTTPWorkspaceRegistryAndCommandCompatibility(t *testing.T) {
 	if worksFor != 1 {
 		t.Fatal("works_for was not provisioned")
 	}
+	var people, relations int
+	if err := s.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM object_instances WHERE workspace_id=? AND object_type_id=?), (SELECT COUNT(*) FROM object_relations WHERE workspace_id=?)`, workspaceID, "otp_builtin_person_"+workspaceID, workspaceID).Scan(&people, &relations); err != nil || people != 0 || relations != 0 || createdData["creator_person_object_instance_id"] != nil || createdData["works_for_object_relation_id"] != nil {
+		t.Fatalf("unexpected creator person or relation: people=%d relations=%d response=%v err=%v", people, relations, createdData, err)
+	}
 	registry := request(t, handler, "GET", "/api/v1/kernel/command-registry", nil)
 	if registry.Code != 200 {
 		t.Fatal(registry.Body.String())
@@ -138,7 +142,7 @@ func TestRhizaWorkspaceCreationIsAtomicIdempotentAndConcurrent(t *testing.T) {
 		(SELECT COUNT(*) FROM relation_cardinality_slots WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM object_field_index WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM workspace_creation_requests WHERE workspace_id=?)`, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID).Scan(&types, &revisions, &definitions, &objects, &relations, &slots, &indexes, &requests)
-	if err != nil || types != 2 || revisions != 2 || definitions != 1 || objects != 2 || relations != 1 || slots != 1 || indexes != 2 || requests != 1 {
+	if err != nil || types != 2 || revisions != 2 || definitions != 1 || objects != 1 || relations != 0 || slots != 0 || indexes != 1 || requests != 1 {
 		t.Fatalf("builtins=%d,%d,%d,%d,%d,%d,%d,%d err=%v", types, revisions, definitions, objects, relations, slots, indexes, requests, err)
 	}
 	commandResponse := request(t, handler, "POST", "/api/v1/kernel/commands", map[string]any{

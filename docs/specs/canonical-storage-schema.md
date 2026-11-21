@@ -4,10 +4,7 @@ The executable storage schema source of truth is `internal/store/schema.sql`.
 `internal/store/store.go` applies it to an empty local SQLite database and rejects a
 database whose exact schema identity does not match. There is no schema-version
 migration path at server startup; schema changes are breaking and require
-explicit recreation. The separate, offline
-[v2-to-v3 logical migration](../plans/rhiza-v012-v019-logical-migration.md)
-preserves application state in a fresh Rhiza cluster. It does not weaken startup
-identity checks or provide a general migration framework.
+explicit recreation.
 
 Do not hand-maintain column inventories here. For exact tables, columns,
 indexes, triggers, and constraints, inspect `internal/store/schema.sql` or the live database
@@ -23,13 +20,13 @@ recreated.
 ## Canonical Ownership
 
 The Go Kernel owns canonical business storage in SQL: embedded Rhiza SQL in
-deployed mode and SQLite only in local/test mode. CLI, adapters and automations
+deployed mode and SQLite only in local/test mode. API clients, adapters and automations
 must not write canonical rows directly.
 
 ## Breaking Object-Type Noun Contract
 
 Every object type has three required naming values: `key`, `singular`, and
-`plural`. `key` is the plural slug used for machine lookup and CLI dispatch;
+`plural`. `key` is the plural slug used for machine lookup and command-surface dispatch;
 `singular` and `plural` are explicit names used by help and other user-facing
 surfaces. There is no separate `slug` value and no fallback or inflection.
 No pre-existing user-defined object types are migrated. New definitions must
@@ -46,10 +43,9 @@ IDs where their contracts require IDs.
 
 This section is a reader map, not a schema table.
 
-- Auth and workspace rows bind external identities, sessions, and workspace
-  memberships to internal Compos principals. Workspaces, principals, provider
-  identities, principal-person bindings, sessions, and memberships remain
-  control-plane authority.
+- Workspaces and creator principal audit fields remain control-plane metadata.
+  They describe attribution and idempotency; they do not authorize business
+  operations.
 - `object_types` define business object schemas. `people` is the built-in
   dynamic object type for every human represented in workspace data; it uses
   ordinary `object_types` and `object_instances` and is not authentication
@@ -63,10 +59,6 @@ This section is a reader map, not a schema table.
   instances use these ordinary relations when linked to business objects. The
   built-in `works_for` definition links `people` to `companies` through ordinary
   `object_relations`.
-- A principal-person binding is a dedicated control-plane relation-like edge,
-  not an `object_relation`: a principal is not an `object_instance`, and the
-  binding must satisfy auth/session constraints unavailable to generic
-  relations.
 - The command ledger is the source of accepted command truth and idempotency
   outcomes.
 - `spec_revisions` stores bounded-kind immutable Task, Function, Workflow,
@@ -108,14 +100,8 @@ This section is a reader map, not a schema table.
   from `people` to `companies`.
 - V1 command handlers reject required relation definitions until an atomic
   create-and-link command contract exists.
-- A person may exist without a principal binding.
-- Session insertion requires exactly one principal-person binding for the
-  authenticated principal in the selected workspace. The binding is created
-  and constrained by the auth control plane, not by relation definitions or
-  object-relation cardinality.
-- Neither person objects, principal-person bindings, nor person-to-business
-  relations grant authentication, membership, roles, capabilities, or other
-  authorization.
+- Person objects do not grant authentication, membership, roles, capabilities,
+  or other authorization.
 - Same command idempotency scope and same payload hash returns the original
   result; same scope and different payload hash returns `idempotency_conflict`.
 - Automations may emit command intents only through the Kernel command path.
@@ -156,30 +142,9 @@ related Journal facts as one transaction. If any part fails, none commit.
   `object_relations`, and the registered `relation.link` / `relation.unlink`
   commands. They have no auth meaning, and no separate `employment` object
   exists.
-- A principal-person binding is stored as a dedicated control-plane
-  relation-like edge because its principal endpoint is not an object instance.
-  Generic relation definitions and object relations must not represent or
-  enforce this binding. The binding is outside the person payload and is
-  immutable after creation in V1; neither `object.update` nor
-  `relation.link` / `relation.unlink` can change it.
-- `person_binding_claims` records immutable claim snapshots for built-in
-  persons. If a future internal controlled flow binds an existing person, it
-  must check the relevant row rather than mutable display-name similarity or an
-  inferred current payload value. The current Rauthy request has no
-  existing-person selection field.
-- Before inserting a session, the auth control plane must resolve exactly one
-  binding for the authenticated principal in the selected workspace. An
-  existing binding is reused. For an unbound principal, the current Rauthy
-  login creates a new person.
 - Workspace creation is a control-plane provisioning operation, not a Kernel
-  command. It creates the workspace, owner membership, creator person object of
-  type `people`, principal-person binding, deterministic own company, and creator
-  `works_for` relation atomically and idempotently. Later
-  principals who join or log in are not automatically linked to the workspace
-  company.
-- Rauthy exchange does not support existing-person selection in V1. Its email
-  claim is usable only when userinfo marks it verified; phone claims are
-  unsupported until explicit verification is available.
-- Person objects and principal-person bindings do not authorize sessions,
-  workspace membership, roles, capabilities, or business operations. The
-  principal auth control plane remains the sole authority for those decisions.
+  command. It atomically creates the workspace, built-in types and relation
+  definition, and deterministic own company. It creates no creator person or
+  person-to-company relation.
+- Person objects do not authorize sessions, workspace membership, roles,
+  capabilities, or business operations.

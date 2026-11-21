@@ -107,7 +107,7 @@ func TestKernelRhizaRecognizesEveryRegisteredCommand(t *testing.T) {
 			aggregateID = &missing
 		}
 		c := command("cmd_registered_"+name, "idem_registered_"+name, definition.WireName, definition.AllowedTargetAggregateTypes[0], aggregateID, map[string]any{})
-		_, err = testStoreExecutor(s).executeRhiza(ctx, "dev", c)
+		_, err = testStoreExecutor(s).executeRhiza(ctx, "dev", Actor{Type: "user", ID: "dev"}, c)
 		var rejected *CommandError
 		if !errors.As(err, &rejected) || rejected.Outcome == "unsupported_storage" {
 			t.Fatalf("definition[%d] %s error=%v", i, definition.WireName, err)

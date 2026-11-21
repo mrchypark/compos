@@ -237,7 +237,6 @@ CREATE TABLE reactive_rule_revisions (
   definition_schema_version INTEGER NOT NULL CHECK (definition_schema_version >= 1),
   definition_hash TEXT NOT NULL CHECK (definition_hash GLOB 'sha256:*'),
   requested_actor_json TEXT NOT NULL CHECK (json_valid(requested_actor_json) AND json_type(requested_actor_json) = 'object'),
-  permission_policy TEXT NOT NULL CHECK (permission_policy = 'owner_principal'),
   trigger_json TEXT NOT NULL CHECK (json_valid(trigger_json) AND json_type(trigger_json) = 'object'),
   predicates_json TEXT NOT NULL CHECK (json_valid(predicates_json) AND json_type(predicates_json) = 'object'),
   action_json TEXT NOT NULL CHECK (json_valid(action_json) AND json_type(action_json) = 'object'),
@@ -265,7 +264,6 @@ WHEN NOT (
   AND OLD.definition_schema_version = NEW.definition_schema_version
   AND OLD.definition_hash = NEW.definition_hash
   AND OLD.requested_actor_json = NEW.requested_actor_json
-  AND OLD.permission_policy = NEW.permission_policy
   AND OLD.trigger_json = NEW.trigger_json
   AND OLD.predicates_json = NEW.predicates_json
   AND OLD.action_json = NEW.action_json
@@ -351,7 +349,7 @@ BEGIN SELECT RAISE(ABORT, 'spec revisions are immutable'); END;
 CREATE TABLE command_ledger (
   command_id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  authenticated_principal_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
   requested_actor_json TEXT NOT NULL CHECK (json_valid(requested_actor_json)),
   effective_actor_json TEXT NOT NULL CHECK (json_valid(effective_actor_json) AND json_type(effective_actor_json) = 'object'),
   actor_context_hash TEXT NOT NULL CHECK (actor_context_hash GLOB 'sha256:*'),
@@ -366,7 +364,7 @@ CREATE TABLE command_ledger (
   result_json TEXT NOT NULL CHECK (json_valid(result_json) AND json_type(result_json) = 'object'),
   effective_at TEXT NOT NULL CHECK (effective_at GLOB '????-??-??T*Z'),
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T*Z'),
-  UNIQUE (workspace_id, authenticated_principal_id, idempotency_key),
+  UNIQUE (workspace_id, principal_id, idempotency_key),
   UNIQUE (workspace_id, command_id)
 ) STRICT;
 CREATE INDEX idx_command_ledger_workspace_created ON command_ledger(workspace_id, created_at, command_id);
@@ -458,13 +456,13 @@ CREATE TABLE projection_events (
 CREATE INDEX idx_projection_events_command ON projection_events(workspace_id, command_id);
 
 CREATE TABLE workspace_creation_requests (
-  authenticated_principal_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
   idempotency_key TEXT NOT NULL,
   request_hash TEXT NOT NULL CHECK (request_hash GLOB 'sha256:*'),
   request_payload_json TEXT NOT NULL CHECK (json_valid(request_payload_json) AND json_type(request_payload_json) = 'object'),
   result_json TEXT NOT NULL CHECK (json_valid(result_json) AND json_type(result_json) = 'object'),
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T*Z'),
-  PRIMARY KEY (authenticated_principal_id, idempotency_key),
+  PRIMARY KEY (principal_id, idempotency_key),
   UNIQUE (workspace_id)
 ) STRICT;

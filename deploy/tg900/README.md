@@ -1,16 +1,27 @@
-# tg900 authentication
+# tg900 deployment
 
-Compos exchanges patch-data `users` tokens at `POST /api/v1/auth/pocketbase`
-with JSON `{"token":"<patch-data token>"}`. Verified `example.invalid` emails are
-allowed. Use the returned `data.session.token` as the Compos bearer token.
+## Network boundary
 
-`COMPOS_BOOTSTRAP_WORKSPACE_NAME=Compos` provisions the Rhiza login workspace
-atomically before serving requests and selects it for automatic enrollment.
-Successful logins receive `member` membership, never automatic owner access.
-Provisioning reuses the workspace creation and built-in schema paths under
-the internal `system:bootstrap` principal. Repeated startup is idempotent.
-This setting requires PocketBase mode and must not be combined with an explicit
-`COMPOS_POCKETBASE_AUTO_WORKSPACE_ID`.
+The current Compos server has no authentication or authorization: every HTTP
+route, including Conductor callbacks and connector routes, accepts requests
+without credentials and attributes them to `local`. The former PocketBase
+login, session and bootstrap settings no longer apply. Conductor's outbound
+service token does not protect Compos.
+
+The Compos Service defaults to ClusterIP and the server listens on all Pod
+interfaces. ClusterIP alone is not an access-control boundary: other workloads
+with network reachability can call the API. This manifest supplies no gateway
+or NetworkPolicy and does not establish a trusted boundary. It is suitable only
+where all reachable clients and network paths are already trusted. Do not roll
+out the current authless server for protected access until the deployment owner
+enforces and verifies caller authentication and network isolation outside Compos,
+including prevention of direct Service and Pod access that bypasses the gateway.
+
+Conductor and SearchSyncer are configured to call Compos directly; other client
+and ingress identities, cluster policy enforcement, and node or port-forward
+access are not defined here. Inventory and preserve required paths before
+applying restrictions, and test both allowed and denied access on the actual
+cluster. This repository cannot establish those controls from this manifest.
 
 The deployment uses `emptyDir` for local state, with Rhiza GCS remote durability
 set to `before-ack`. On 2026-10-08 the v0.12 application state was logically
@@ -33,7 +44,7 @@ passed after recovery from GCS into a fresh local directory. See the
 
 Commit `6e31513558bc6ca5e0ab8352dab8257eec0f118c` passed the full Go tests,
 vet, CLI/server user journey, and hosted `test` and `rhiza-cluster` CI jobs.
-The existing tg900 BuildKit published `compos-server`, `compos-cli`, and
+The historical tg900 BuildKit published `compos-server`, `compos-cli`, and
 `compos-search-syncer` images with tag `20261008-6e31513`.
 The server digest is
 `sha256:29fc5e3b453248a567b2093c47beb47d0def5d4591248bcc444a97bddfa49c9a`.
@@ -60,6 +71,8 @@ The manifest does not provision bucket IAM; verify that binding before rollout.
 On 2026-09-05 the user approved resetting the old local workspace and clearing
 the legacy bucket objects. The legacy `compos/compos` StatefulSet,
 `compos/compos-s2-lite` and their `compos/compos-operator` are scaled to zero.
+The CLI, bbolt request ledger, and operator source/images are no longer part of
+the current repository or release pipeline.
 Do not re-enable them: their old `hiqlite/compos/7` and `compos/s2/7` writers
 must remain retired. Renaming their backups does not convert them to Rhiza.
 Legacy shutdown/IAM GitOps reconciliation in Deploy remains separate from this
@@ -74,21 +87,19 @@ indexes and syncers are not changed.
 ## SearchSyncer
 
 Apply `compos-conductor.yaml` before `search-syncer.yaml`. The separate
-`compos-syncer-auth` Secret contains `compos-token` (random 32+ byte deployment
-token) and `meilisearch-write-key`. The writer key is restricted to
+`compos-syncer-auth` Secret contains `compos-token` and `meilisearch-write-key`.
+The writer key is restricted to
 `compos-tg900-objects` with `indexes.get`, `indexes.create`, `settings.update`,
 `documents.add`, `documents.delete`, and `tasks.get`; it cannot search or access
 legacy indexes. Provision keys using the Meilisearch keys API, never commit them.
 
-`COMPOS_SEARCH_SYNCER_TOKEN` enables projection-only service authentication.
-`COMPOS_SEARCH_SYNCER_WORKSPACE_ID` selects its one existing workspace, defaulting
-to the login bootstrap workspace when omitted. Configure this only at startup.
-The token permits exact GET requests to `/api/v1/search-syncer/workspace` and that
-workspace's `/projection/snapshot` and `/projection/events` paths. It is not a
-user session, workspace member, search credential, or command/admin credential.
-Rotate it by replacing the Secret and rolling both Compos and Syncer.
+`COMPOS_SEARCH_SYNCER_WORKSPACE_ID` selects the workspace returned by the
+discovery endpoint; configure it on Compos at startup. The current manifest
+does not set it, so discovery returns 503 until the deployment supplies it.
+The syncer's configured token does not authenticate requests to the current
+Compos server or limit their scope. Network access must be controlled as above.
 
-With `COMPOS_WORKSPACE_ID` omitted, Syncer discovers the token's workspace every
+With `COMPOS_WORKSPACE_ID` omitted, Syncer discovers the configured workspace every
 cycle. When discovery changes workspace, it deletes only the previous workspace's
 documents and waits for that task before resetting its snapshot/cursor. Failed
 cleanup preserves the previous state for retry; unrelated workspaces are untouched.

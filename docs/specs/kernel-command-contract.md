@@ -27,7 +27,7 @@ Every business mutation in Compos is a Kernel command.
   ],
   "payload": {},
   "causation": {
-    "source": "cli|api|automation|adapter_reducer",
+    "source": "api|automation|adapter_reducer",
     "attempt_id": "local_attempt_id_or_null",
     "event_id": "optional_prior_event",
     "automation": {
@@ -166,7 +166,7 @@ references require IDs.
 Idempotency scope is:
 
 ```text
-(workspace_id, authenticated_principal_id, idempotency_key)
+(workspace_id, principal_id, idempotency_key)
 ```
 
 Same scoped key and same payload hash returns the original result. Same scoped

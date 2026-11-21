@@ -63,8 +63,8 @@ ordinary production `COMPOS_AUTH_*`, PocketBase, cloud storage and conductor
 variables are not consumed. No persistent Compos server or fixed Compos port is
 needed. The proposed issuer port is owned by the GoAuthy task.
 
-Assertions: positive exchange; stable principal and Person on repeated login;
-exactly one member enrollment and principal–Person binding; authenticated session
+Assertions: positive exchange; stable principal and creator Person on repeated login;
+member enrollment without a principal–Person control-plane row; authenticated session
 identity/membership; refusal of a non-member workspace; supplied negative exchanges;
 logout followed by 401 for that session; second session remains usable and is then
 logged out. The DB and returned tokens are disposable.

@@ -20,13 +20,11 @@ import (
 )
 
 type Server struct {
-	authority               Authority
 	store                   *store.Store
 	kernel                  *kernel.Executor
 	mux                     *http.ServeMux
 	conductorURL            string
 	conductorToken          string
-	conductorCallbackToken  string
 	conductorClient         *http.Client
 	conductorWake           chan struct{}
 	conductorCancel         context.CancelFunc
@@ -41,16 +39,10 @@ type Server struct {
 	searchSyncerWorkspaceID string
 }
 
-func New(s *store.Store) *Server { return NewWithAuthority(s, nil) }
-
-func NewWithAuthority(s *store.Store, authority Authority) *Server {
+func New(s *store.Store) *Server {
 	server := &Server{
 		store: s, kernel: kernel.NewStoreExecutor(s), mux: http.NewServeMux(),
 		searchClient: &http.Client{Timeout: 10 * time.Second},
-	}
-	server.authority = authority
-	if authority != nil {
-		server.kernel.AuthorizeCommand = authority.AuthorizeCommand
 	}
 	server.routes()
 	server.enableWorkflowScheduler()
@@ -69,10 +61,6 @@ func (s *Server) Close() error {
 	return nil
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r, ok := s.authenticateRequest(w, r)
-	if !ok {
-		return
-	}
 	s.mux.ServeHTTP(w, r)
 }
 
@@ -108,6 +96,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/projection/events", s.projectionEvents)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/projection/snapshot", s.projectionSnapshot)
 	s.mux.HandleFunc("POST /api/v1/workspaces/{workspace_id}/search", s.search)
+}
+
+// ConfigureSearchSyncer selects the workspace exposed to the search syncer.
+func (s *Server) ConfigureSearchSyncer(workspace string) error {
+	s.searchSyncerWorkspaceID = strings.TrimSpace(workspace)
+	return nil
+}
+
+func (s *Server) searchSyncerWorkspace(w http.ResponseWriter, r *http.Request) {
+	if s.searchSyncerWorkspaceID == "" {
+		problem(w, 503, "workspace_unavailable", "configuration", false, "search workspace is not configured")
+		return
+	}
+	write(w, 200, map[string]any{"workspace_id": s.searchSyncerWorkspaceID})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +149,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	} else {
 		err = s.store.Transact(r.Context(), "workspace:"+principal+":"+body.IdempotencyKey, func(tx store.Tx) error {
 			var storedHash, result string
-			err := tx.QueryRow(`SELECT request_hash,result_json FROM workspace_creation_requests WHERE authenticated_principal_id=? AND idempotency_key=?`, principal, body.IdempotencyKey).Scan(&storedHash, &result)
+			err := tx.QueryRow(`SELECT request_hash,result_json FROM workspace_creation_requests WHERE principal_id=? AND idempotency_key=?`, principal, body.IdempotencyKey).Scan(&storedHash, &result)
 			if err == nil {
 				if storedHash != hash {
 					return errors.New("idempotency conflict")
@@ -177,10 +179,8 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 			response = map[string]any{"data": map[string]any{
 				"id": id, "workspace_id": id, "key": body.Key, "name": body.Name, "version": 1,
 				"creator_principal_id":                 principal,
-				"creator_person_object_instance_id":    "obj_creator_" + id,
 				"workspace_company_object_instance_id": "obj_company_" + id,
 				"works_for_relation_definition_id":     "rdf_builtin_works_for_" + id,
-				"works_for_object_relation_id":         "rel_creator_company_" + id,
 				"created_at":                           now, "created": true, "status": "created",
 			}}
 			resultJSON, _ := json.Marshal(response)
@@ -213,7 +213,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key, idempotencyKey, requestJSON, requestHash string) (any, bool, error) {
 	readRequest := func() (any, string, error) {
 		var storedHash, result string
-		err := s.store.ReadRow(ctx, store.ReadLinearizable, `SELECT request_hash,result_json FROM workspace_creation_requests WHERE authenticated_principal_id=? AND idempotency_key=?`, principal, idempotencyKey).Scan(&storedHash, &result)
+		err := s.store.ReadRow(ctx, store.ReadLinearizable, `SELECT request_hash,result_json FROM workspace_creation_requests WHERE principal_id=? AND idempotency_key=?`, principal, idempotencyKey).Scan(&storedHash, &result)
 		if err != nil {
 			return nil, "", err
 		}
@@ -242,16 +242,14 @@ func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key,
 	response := map[string]any{"data": map[string]any{
 		"id": id, "workspace_id": id, "key": key, "name": name, "version": 1,
 		"creator_principal_id":                 principal,
-		"creator_person_object_instance_id":    "obj_creator_" + id,
 		"workspace_company_object_instance_id": "obj_company_" + id,
 		"works_for_relation_definition_id":     "rdf_builtin_works_for_" + id,
-		"works_for_object_relation_id":         "rel_creator_company_" + id,
 		"created_at":                           now, "created": true, "status": "created",
 	}}
 	resultJSON, _ := json.Marshal(response)
 	zero, one := int64(0), int64(1)
 	statements := []rhiza.SQLStatement{
-		{SQL: `SELECT authenticated_principal_id FROM workspace_creation_requests WHERE authenticated_principal_id=? AND idempotency_key=?`, Args: []any{principal, idempotencyKey}, WantRows: true, ExpectedReturnedRows: &zero},
+		{SQL: `SELECT principal_id FROM workspace_creation_requests WHERE principal_id=? AND idempotency_key=?`, Args: []any{principal, idempotencyKey}, WantRows: true, ExpectedReturnedRows: &zero},
 		{SQL: `SELECT id FROM workspaces WHERE key=?`, Args: []any{key}, WantRows: true, ExpectedReturnedRows: &zero},
 		{SQL: `INSERT INTO workspaces(id,key,name,version,created_at,updated_at) VALUES(?,?,?,1,?,?)`, Args: []any{id, key, name, now, now}, ExpectedRowsAffected: &one},
 	}
@@ -260,7 +258,7 @@ func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key,
 		return nil, false, err
 	}
 	statements = append(statements, builtins...)
-	statements = append(statements, rhiza.SQLStatement{SQL: `INSERT INTO workspace_creation_requests(authenticated_principal_id,idempotency_key,request_hash,request_payload_json,result_json,workspace_id,created_at) VALUES(?,?,?,?,?,?,?)`, Args: []any{principal, idempotencyKey, requestHash, requestJSON, string(resultJSON), id, now}, ExpectedRowsAffected: &one})
+	statements = append(statements, rhiza.SQLStatement{SQL: `INSERT INTO workspace_creation_requests(principal_id,idempotency_key,request_hash,request_payload_json,result_json,workspace_id,created_at) VALUES(?,?,?,?,?,?,?)`, Args: []any{principal, idempotencyKey, requestHash, requestJSON, string(resultJSON), id, now}, ExpectedRowsAffected: &one})
 	applyErr := s.store.ApplyStatements(ctx, "workspace:"+uuid.NewString(), statements)
 	if applyErr == nil {
 		return response, true, nil
@@ -306,9 +304,7 @@ func provisionBuiltins(ctx context.Context, tx contextExecer, workspace, workspa
 	peopleID := "otp_builtin_person_" + workspace
 	companiesID := "otp_builtin_company_" + workspace
 	relationID := "rdf_builtin_works_for_" + workspace
-	personID := "obj_creator_" + workspace
 	companyID := "obj_company_" + workspace
-	edgeID := "rel_creator_company_" + workspace
 	peopleSchema := canonical(map[string]any{"type": "object", "additionalProperties": true, "properties": map[string]any{"display_name": map[string]any{"type": "string"}, "email": map[string]any{"type": "string", "format": "email"}, "phone": map[string]any{"type": "string"}}})
 	companySchema := canonical(map[string]any{"type": "object", "additionalProperties": true, "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []string{"name"}})
 	link := map[string]any{"id": relationID, "key": "works_for", "from_object_type_id": peopleID, "to_object_type_id": companiesID, "cardinality": "many_to_one", "required": false}
@@ -325,24 +321,14 @@ func provisionBuiltins(ctx context.Context, tx contextExecer, workspace, workspa
 	if _, err := tx.ExecContext(ctx, `INSERT INTO relation_definitions(id,workspace_id,key,from_object_type_id,to_object_type_id,cardinality,required,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,'many_to_one',0,1,?,?,?,?)`, relationID, workspace, "works_for", peopleID, companiesID, ts, ts, "system", "system"); err != nil {
 		return err
 	}
-	personValues := canonical(map[string]any{"display_name": principal})
 	companyValues := canonical(map[string]any{"name": workspaceName})
-	if _, err := tx.ExecContext(ctx, `INSERT INTO object_instances(id,workspace_id,object_type_id,object_type_schema_version,title,payload_json,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,?,1,?,?,?,?)`, personID, workspace, peopleID, 1, principal, personValues, ts, ts, principal, principal); err != nil {
-		return err
-	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO object_instances(id,workspace_id,object_type_id,object_type_schema_version,title,payload_json,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,?,1,?,?,?,?)`, companyID, workspace, companiesID, 1, workspaceName, companyValues, ts, ts, principal, principal); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO object_relations VALUES(?,?,?,?,?,1,?,?,?,?)`, edgeID, workspace, relationID, personID, companyID, ts, ts, principal, principal); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO relation_cardinality_slots VALUES(?,?,?,?,?,?,?)`, "slot_"+edgeID, workspace, relationID, edgeID, "from", personID, ts); err != nil {
 		return err
 	}
 	for _, row := range []struct {
 		typeID, objectID, field, kind string
 		value                         any
-	}{{peopleID, personID, "display_name", "string", principal}, {companiesID, companyID, "name", "string", workspaceName}} {
+	}{{companiesID, companyID, "name", "string", workspaceName}} {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO object_field_index(workspace_id,object_type_id,object_instance_id,field_name,value_kind,value_text) VALUES(?,?,?,?,?,?)`, workspace, row.typeID, row.objectID, row.field, row.kind, row.value); err != nil {
 			return err
 		}
@@ -367,7 +353,7 @@ func (s *Server) submitCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.CommandType == "function.record_result" || c.CommandType == "agent.record_result" || c.CommandType == "workflow.complete" {
-		problem(w, http.StatusForbidden, "forbidden", "authz", false, "internal runtime completion commands are not accepted on the public command endpoint")
+		problem(w, http.StatusForbidden, "forbidden", "protocol", false, "internal runtime completion commands are not accepted on the public command endpoint")
 		return
 	}
 	receipt, err := s.kernel.Execute(r.Context(), principal(r), c)
@@ -452,6 +438,7 @@ func (s *Server) readObject(w http.ResponseWriter, r *http.Request) {
 	}
 	write(w, 200, map[string]any{"data": data, "consistency": consistency("canonical_linearizable")})
 }
+
 func (s *Server) object(ctx context.Context, workspace, id string) (map[string]any, error) {
 	var typeID, typeKey, title, payload, state string
 	var schemaVersion, version int64
@@ -520,7 +507,7 @@ func (s *Server) listHumanWork(w http.ResponseWriter, r *http.Request) {
 	offset := boundedInt(r, "offset", 0, 0, 1<<30)
 	// ponytail: replay the journal directly; materialize an inbox only when measured queue latency requires it.
 	rows, err := s.store.ReadRows(r.Context(), store.ReadLocal, `
-		SELECT route.stream_id,route.stream_sequence,route.payload_json,route.created_at,
+		SELECT route.stream_id,route.stream_sequence,route.payload_json,route.created_at,route.participant_id,
 		       opened.spec_revision_id,opened.principal_id,opened.payload_json,opened.created_at,
 		       spec.family_id,spec.revision,spec.payload_json,spec.digest,
 		       (SELECT MAX(j.stream_sequence) FROM journal_records j WHERE j.workspace_id=route.workspace_id AND j.stream_id=route.stream_id),
@@ -534,11 +521,11 @@ func (s *Server) listHumanWork(w http.ResponseWriter, r *http.Request) {
 		JOIN journal_records opened ON opened.workspace_id=route.workspace_id AND opened.stream_id=route.stream_id AND opened.kind='work.opened'
 		JOIN spec_revisions spec ON spec.workspace_id=opened.workspace_id AND spec.id=opened.spec_revision_id
 		WHERE route.workspace_id=? AND route.kind='work.routed'
-		  AND route.participant_kind='human' AND route.participant_id=?
+		  AND route.participant_kind='human'
 		  AND route.stream_sequence=(SELECT MAX(r2.stream_sequence) FROM journal_records r2 WHERE r2.workspace_id=route.workspace_id AND r2.stream_id=route.stream_id AND r2.kind='work.routed' AND COALESCE(json_extract(r2.payload_json,'$.workflow_route_id'),'')=COALESCE(json_extract(route.payload_json,'$.workflow_route_id'),''))
 		  AND NOT EXISTS (SELECT 1 FROM journal_records terminal WHERE terminal.workspace_id=route.workspace_id AND terminal.stream_id=route.stream_id AND terminal.kind IN ('work.satisfied','work.cancelled'))
 		  AND NOT EXISTS (SELECT 1 FROM journal_records submitted WHERE submitted.workspace_id=route.workspace_id AND submitted.stream_id=route.stream_id AND submitted.kind='work.submitted' AND submitted.stream_sequence>route.stream_sequence AND COALESCE(json_extract(submitted.payload_json,'$.workflow_route_id'),'')=COALESCE(json_extract(route.payload_json,'$.workflow_route_id'),''))
-		ORDER BY route.created_at,route.stream_id LIMIT ? OFFSET ?`, r.PathValue("workspace_id"), principal(r), limit, offset)
+		ORDER BY route.created_at,route.stream_id LIMIT ? OFFSET ?`, r.PathValue("workspace_id"), limit, offset)
 	if err != nil {
 		dbError(w, err)
 		return
@@ -546,10 +533,10 @@ func (s *Server) listHumanWork(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := []any{}
 	for rows.Next() {
-		var id, routePayload, assignedAt, taskID, owner, openedPayload, openedAt, family, taskPayload, digest, updatedAt string
+		var id, routePayload, assignedAt, assigneeID, taskID, owner, openedPayload, openedAt, family, taskPayload, digest, updatedAt string
 		var assignedSequence, revision, version int64
 		var activeFunctions, activeWorkflows, deadlineReached bool
-		if err := rows.Scan(&id, &assignedSequence, &routePayload, &assignedAt, &taskID, &owner, &openedPayload, &openedAt, &family, &revision, &taskPayload, &digest, &version, &updatedAt, &activeFunctions, &activeWorkflows, &deadlineReached); err != nil {
+		if err := rows.Scan(&id, &assignedSequence, &routePayload, &assignedAt, &assigneeID, &taskID, &owner, &openedPayload, &openedAt, &family, &revision, &taskPayload, &digest, &version, &updatedAt, &activeFunctions, &activeWorkflows, &deadlineReached); err != nil {
 			dbError(w, err)
 			return
 		}
@@ -558,7 +545,7 @@ func (s *Server) listHumanWork(w http.ResponseWriter, r *http.Request) {
 		item := map[string]any{
 			"id": id, "version": version, "status": projectedWorkStatus(false, false, activeFunctions, activeWorkflows, false, true),
 			"task":               map[string]any{"revision_id": taskID, "family_id": family, "revision": revision, "digest": digest, "spec": raw(taskPayload)},
-			"owner_principal_id": owner, "assignee": map[string]any{"kind": "human", "id": principal(r)}, "context": opened["context"],
+			"owner_principal_id": owner, "assignee": map[string]any{"kind": "human", "id": assigneeID}, "context": opened["context"],
 			"deadline_at": opened["deadline_at"], "deadline_reached": deadlineReached,
 			"assigned_sequence": assignedSequence, "assigned_at": assignedAt, "opened_at": openedAt, "updated_at": updatedAt,
 		}
@@ -750,7 +737,7 @@ func projectedWorkStatus(cancelled, completed, activeFunctions, activeWorkflows,
 func (s *Server) listLedger(w http.ResponseWriter, r *http.Request) {
 	limit := boundedInt(r, "limit", 50, 1, 100)
 	offset := boundedInt(r, "offset", 0, 0, 1<<30)
-	rows, err := s.store.ReadRows(r.Context(), store.ReadLocal, `SELECT command_id,authenticated_principal_id,idempotency_key,command_type,outcome,result_json,effective_at,created_at FROM command_ledger WHERE workspace_id=? ORDER BY created_at DESC,command_id LIMIT ? OFFSET ?`, r.PathValue("workspace_id"), limit, offset)
+	rows, err := s.store.ReadRows(r.Context(), store.ReadLocal, `SELECT command_id,principal_id,idempotency_key,command_type,outcome,result_json,effective_at,created_at FROM command_ledger WHERE workspace_id=? ORDER BY created_at DESC,command_id LIMIT ? OFFSET ?`, r.PathValue("workspace_id"), limit, offset)
 	if err != nil {
 		dbError(w, err)
 		return
@@ -763,7 +750,7 @@ func (s *Server) listLedger(w http.ResponseWriter, r *http.Request) {
 			dbError(w, err)
 			return
 		}
-		data = append(data, map[string]any{"command_id": id, "authenticated_principal_id": principal, "idempotency_key": key, "command_type": commandType, "outcome": outcome, "result": raw(result), "effective_at": effective, "created_at": created})
+		data = append(data, map[string]any{"command_id": id, "principal_id": principal, "idempotency_key": key, "command_type": commandType, "outcome": outcome, "result": raw(result), "effective_at": effective, "created_at": created})
 	}
 	var total int
 	_ = s.store.ReadRow(r.Context(), store.ReadLocal, `SELECT COUNT(*) FROM command_ledger WHERE workspace_id=?`, r.PathValue("workspace_id")).Scan(&total)
@@ -1029,21 +1016,13 @@ func commandError(w http.ResponseWriter, err error) {
 	case "quorum_unavailable":
 		status = http.StatusServiceUnavailable
 		category = "storage"
-	case "external_authority_unavailable":
-		status = http.StatusServiceUnavailable
-		category = "dependency"
 	}
 	problemDetails(w, status, e.Outcome, category, e.Retryable, e.Message, e.Details)
 }
-func principal(r *http.Request) string {
-	if value, ok := r.Context().Value(principalContextKey{}).(string); ok && value != "" {
-		return value
-	}
-	return ""
-}
-func raw(s string) any       { var v any; _ = json.Unmarshal([]byte(s), &v); return v }
-func canonical(v any) string { b, _ := json.Marshal(v); return string(b) }
-func sha(raw []byte) string  { return fmt.Sprintf("sha256:%x", kernelHash(raw)) }
+func principal(*http.Request) string { return "local" }
+func raw(s string) any               { var v any; _ = json.Unmarshal([]byte(s), &v); return v }
+func canonical(v any) string         { b, _ := json.Marshal(v); return string(b) }
+func sha(raw []byte) string          { return fmt.Sprintf("sha256:%x", kernelHash(raw)) }
 func kernelHash(raw []byte) [32]byte {
 	var v any
 	if json.Unmarshal(raw, &v) == nil {

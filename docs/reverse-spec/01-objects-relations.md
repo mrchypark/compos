@@ -21,7 +21,7 @@ Work 제출과 함수가 객체 변경을 호출하는 접점은 포함하지만
 | `object_relation` | 정의 ID, 출발·도착 객체 ID, `version` | 생성은 버전 1이며 `archived_at`은 없다. unlink는 행을 물리 삭제한다. |
 | 카디널리티 슬롯 | 정의·간선·`side`·객체 ID | `(workspace_id, relation_definition_id, side, object_instance_id)` 유일성으로 단일 연결을 강제한다. |
 
-타입·객체·관계 정의·간선은 생성/수정 시각과 principal을 저장한다. 타입과 관계 정의의 `(workspace_id,key)` 유일성은 보관된 행에도 적용되므로 보관만으로 키를 재사용할 수 없다. 관계 간선은 `(workspace_id,definition,from,to)`도 유일하다. 외래 키는 워크스페이스를 함께 묶어 다른 워크스페이스의 타입·객체를 참조하지 못하게 한다. [타입·리비전·객체 DDL](../../internal/store/schema.sql#L18), [관계 DDL](../../internal/store/schema.sql#L99)
+타입·객체·관계 정의·간선은 생성/수정 시각과 principal을 저장한다. 타입과 관계 정의의 `(workspace_id,key)` 유일성은 보관된 행에도 적용되므로 보관만으로 키를 재사용할 수 없다. 관계 간선은 `(workspace_id,definition,from,to)`도 유일하다. 외래 키는 워크스페이스를 함께 묶어 다른 워크스페이스의 타입·객체를 참조하지 못하게 한다. [타입·리비전·객체 DDL](../../internal/store/schema.sql#L18), [관계 DDL](../../internal/store/schema.sql#L120)
 
 스키마 리비전 digest는 `schema_version`, `field_schema`, `relation_schema`, `state_machine_id`를 포함한 JSON의 해시이다. 객체 생성 시 현재 리비전을 고정하고, 필드 값 전체를 교체할 때 최신 리비전으로 다시 고정한다. 제목만 바꾸거나 상태를 이동할 때에는 기존 pin을 유지한다. [digest](../../internal/kernel/executor.go#L988), [객체 생성](../../internal/kernel/rhiza_object.go#L167), [수정](../../internal/kernel/rhiza_object.go#L284)
 
@@ -55,11 +55,11 @@ Work 제출과 함수가 객체 변경을 호출하는 접점은 포함하지만
 
 precondition 종류의 필수 검사는 **해당 종류가 하나 이상 있는지**만 확인한다. 예를 들어 관계 정의의 양쪽 타입, relation.link의 양쪽 객체 또는 수정 target과 일치하는 모든 ID의 precondition을 등록부가 자동으로 요구하지는 않는다. 제출한 각 precondition은 워크스페이스 내 존재와 정확한 버전을 검사하며, Rhiza는 읽은 상태를 적용 시 다시 확인하는 SQL guard도 추가한다. 보관 상태는 공통 precondition 쿼리에서 제외하지 않는다. [SQLite 검사](../../internal/kernel/executor.go#L144), [Rhiza 검사](../../internal/kernel/rhiza.go#L311)
 
-### 3.3 인증·권한·멱등성·실패
+### 3.3 local attribution·actor 기록·멱등성·실패
 
-HTTP는 health 외 모든 요청에 Authority의 작업 전체 승인을 요구한다. Kernel은 주입된 AuthorizeCommand로 명령을 승인하고 반환 actor와 requested_actor의 일치를 검사한다. membership·actor capability 테이블과 dev fallback은 없다. service/automation은 actor 형식으로 표현할 수 있지만 실제 외부 서비스 인가 계약은 미구현이다. [HTTP 경계](../../internal/server/authority.go#L11), [Kernel 경계](../../internal/kernel/authority.go#L10)
+HTTP는 요청을 인증하지 않고 등록된 route로 전달하며 모든 요청을 고정 principal `local`로 기록한다. caller identity를 받지 않으며 workspace·객체·command 단위 허용 정책도 없다. `requested_actor`는 비어 있지 않은 `type`과 `id`를 기록하는 attribution이며 principal 일치나 actor type 제한을 받지 않는다. ReactiveRule과 Workflow도 같은 `Execute` 경로를 사용한다. [HTTP 처리](../../internal/server/server.go#L54), [actor 해석](../../internal/kernel/actor.go#L5)
 
-멱등 범위는 `(workspace_id, authenticated_principal_id, idempotency_key)`이다. 기존 명령의 ID·종류·payload hash·target·preconditions·causation·requested actor가 같으면 duplicate, 다르면 idempotency_conflict다. 외부 명령 승인은 중복 조회 전에 수행한다. [실행](../../internal/kernel/executor.go#L61), [Rhiza](../../internal/kernel/rhiza.go#L18)
+멱등 범위는 `(workspace_id, principal_id, idempotency_key)`이다. 기존 명령의 ID·종류·payload hash·target·preconditions·causation·requested actor가 같으면 duplicate, 다르면 idempotency_conflict다. 이 비교는 중복 요청을 구분하는 ledger 계약이며 access-control 판정이 아니다. [실행](../../internal/kernel/executor.go#L59), [Rhiza](../../internal/kernel/rhiza.go#L18)
 
 | 오류 outcome | HTTP | 의미 |
 |---|---|---|
@@ -67,7 +67,7 @@ HTTP는 health 외 모든 요청에 Authority의 작업 전체 승인을 요구�
 | `schema_mismatch` | 422 | payload/필드 스키마나 관계 endpoint 타입 불일치 |
 | `precondition_failed` | 409 | 미존재, 버전 불일치, 적용 직전 상태 변경 |
 | `idempotency_conflict` | 409 | 같은 멱등 키에 다른 명령 |
-| `forbidden` | 403 | 외부 승인 거부 또는 actor 불일치 |
+| `forbidden` | 403 | 도메인 규칙 또는 내부 결과 command의 공개 제출 차단 |
 | `quorum_unavailable` | 503 | Rhiza 가용성 오류 |
 | `unsupported_storage` | 501 | 지원하지 않는 저장소 실행 경로 |
 
@@ -112,7 +112,7 @@ HTTP는 health 외 모든 요청에 Authority의 작업 전체 승인을 요구�
 
 관계 경로의 중간 hop은 같은 workspace의 outgoing relation key를 조회하며 여러 간선이 있으면 `r.id` 순서의 첫 간선을 택한다. 최종 필드는 string/number/boolean이어야 하고 누락·미해결 경로·비 scalar 값은 실패한다. 중간 hop 쿼리는 관계 정의의 보관 여부를 필터링하지 않는다. 최종 저장 객체는 활성 여부와 값·버전을 확인하고 commit guard를 추가한다. Work 내 신규 객체도 별도 pending map으로 참조한다. [경로 해석](../../internal/kernel/rhiza_object.go#L46)
 
-카운터 갱신, 객체 삽입, `generated_field_values`의 예약, 관계와 필드 색인은 같은 명령의 원자 적용에 포함된다. 생성 값의 유일 키는 `(workspace,type,field,generated_value)`이며 reset scope는 여기에 포함되지 않는다. 날짜가 바뀌어 같은 문자열을 다시 만들면 제약에 걸릴 수 있다. 객체 보관은 예약을 해제하지 않는다. Work 제출의 여러 생성은 [예약 묶음](../../internal/kernel/work_sequences.go#L1)을 사용한다. [생성 저장](../../internal/kernel/rhiza_object.go#L259), [생성 값 DDL](../../internal/store/schema.sql#L186)
+카운터 갱신, 객체 삽입, `generated_field_values`의 예약, 관계와 필드 색인은 같은 명령의 원자 적용에 포함된다. 생성 값의 유일 키는 `(workspace,type,field,generated_value)`이며 reset scope는 여기에 포함되지 않는다. 날짜가 바뀌어 같은 문자열을 다시 만들면 제약에 걸릴 수 있다. 객체 보관은 예약을 해제하지 않는다. Work 제출의 여러 생성은 [예약 묶음](../../internal/kernel/work_sequences.go#L1)을 사용한다. [생성 저장](../../internal/kernel/rhiza_object.go#L259), [생성 값 DDL](../../internal/store/schema.sql#L207)
 
 ## 6. 관계와 카디널리티
 
@@ -125,7 +125,7 @@ HTTP는 health 외 모든 요청에 Authority의 작업 전체 승인을 요구�
 | `many_to_one` | from | 출발은 하나의 도착만 가지며 도착은 여러 출발을 받을 수 있다. |
 | `many_to_many` | 없음 | 양쪽에 여러 간선이 가능하나 동일 쌍 중복은 금지한다. |
 
-[슬롯 선택](../../internal/kernel/executor.go#L961), [유일 제약·허용 side 트리거](../../internal/store/schema.sql#L119)
+[슬롯 선택](../../internal/kernel/executor.go#L961), [유일 제약·허용 side 트리거](../../internal/store/schema.sql#L140)
 
 `relation.link`는 활성 정의와 활성 양 endpoint를 읽어 정의의 타입과 일치하는지 검사한다. 일치하지 않으면 `schema_mismatch`이고, 정의/endpoint가 없으면 `precondition_failed`이다. 성공 시 간선과 필요한 슬롯을 삽입한다. [link](../../internal/kernel/rhiza_object.go#L380)
 
@@ -186,7 +186,7 @@ HTTP는 health 외 모든 요청에 Authority의 작업 전체 승인을 요구�
 
 SQLite 경로는 트랜잭션에서 변경과 기록을 수행하고, Rhiza 경로는 선형 읽기로 계획한 뒤 expected row 수와 이전 값 guard를 포함한 SQL 묶음을 원자 적용한다. Rhiza commit에는 workspace projection sequence 증가, ledger receipt, activity, outbox, projection event 기록이 포함된다. 한 원자 명령이 64 SQL 문을 넘으면 `validation_failed`로 거부하고 분할 적용하지 않는다. 동시 변경은 `precondition_failed`, DB 제약 실패는 `validation_failed`로 변환하며 적용 실패 후 ledger를 다시 확인하여 동시 중복 요청에 수렴한다. [SQLite 실행](../../internal/kernel/executor.go#L59), [Rhiza commit](../../internal/kernel/rhiza.go#L499)
 
-필드 색인은 루트 scalar(string/number/boolean/null)만 저장하고 배열·객체 값은 건너뛴다. 수정 시 기존 색인을 지우고 다시 만든다. 객체 payload와 스키마 리비전이 원본이며 필드 색인이 중첩 JSON 전체를 대신하지 않는다. [색인 작성](../../internal/kernel/rhiza_object.go#L16), [색인·번호 DDL](../../internal/store/schema.sql#L169)
+필드 색인은 루트 scalar(string/number/boolean/null)만 저장하고 배열·객체 값은 건너뛴다. 수정 시 기존 색인을 지우고 다시 만든다. 객체 payload와 스키마 리비전이 원본이며 필드 색인이 중첩 JSON 전체를 대신하지 않는다. [색인 작성](../../internal/kernel/rhiza_object.go#L16), [색인·번호 DDL](../../internal/store/schema.sql#L190)
 
 ## 10. 테스트 코드 근거와 확인 공백
 
@@ -205,7 +205,7 @@ SQLite 경로는 트랜잭션에서 변경과 기록을 수행하고, Rhiza 경�
 | [filter 파서](../../internal/server/object_resources_test.go#L20) | 허용/거부 필터와 escaping·범위 제한 |
 | [타입별 페이지 범위](../../internal/server/object_resources_test.go#L59) | workspace/type/filter를 페이지 처리 전에 제한 |
 | [타입별 변경](../../internal/server/object_resources_test.go#L105) | 경로 identity, expected_version과 엄격한 body 검사 |
-| [재전송](../../internal/server/object_resources_test.go#L205) / [ledger scope](../../internal/server/object_resources_test.go#L285) | typed 명령 재전송·내용 충돌과 workspace/principal/key 분리 |
+| [재전송](../../internal/server/object_resources_test.go#L205) | typed 명령 재전송·내용 충돌과 저장된 durable effect 불변 |
 | [관계 조회](../../internal/server/definition_reads_test.go#L40) | 방향·정의·workspace 범위 |
 | [Work sequence 예약](../../internal/kernel/work_sequences_test.go#L38) | 기존/새 scope 예약, overflow, 최종 guarded mutation |
 
@@ -218,14 +218,14 @@ SQLite 경로는 트랜잭션에서 변경과 기록을 수행하고, Rhiza 경�
 | [registry.go](../../internal/kernel/registry.go#L1) | 명령 이름, payload와 target, 필수 precondition 종류 |
 | [types.go](../../internal/kernel/types.go#L1) | 봉투·actor·receipt 타입 |
 | [schema.go](../../internal/kernel/schema.go#L1) | 필드·상태 머신·번호 설정 검사와 렌더링 |
-| [executor.go](../../internal/kernel/executor.go#L59) | 저장소 분기, SQLite 실행, 권한·precondition·슬롯·digest |
-| [rhiza.go](../../internal/kernel/rhiza.go#L18) | Rhiza 권한·타입·리비전·관계 정의·보관·commit·멱등성 |
+| [executor.go](../../internal/kernel/executor.go#L59) | 저장소 분기, SQLite 실행, actor attribution·precondition·슬롯·digest |
+| [rhiza.go](../../internal/kernel/rhiza.go#L18) | Rhiza 타입·리비전·관계 정의·보관·commit·멱등성 |
 | [rhiza_object.go](../../internal/kernel/rhiza_object.go#L16) | 객체·번호·상태·inline 관계·간선·필드 색인 |
 | [schema.sql](../../internal/store/schema.sql#L18) | 불변 리비전, 외래 키·유일 키·슬롯·번호 저장 제약 |
 | [server.go](../../internal/server/server.go#L88) | 공개 라우트·범용 명령·일반/배치 읽기·리비전 읽기·오류 |
 | [object_resources.go](../../internal/server/object_resources.go#L20) | 타입별 목록·filter·쓰기 body·커널 명령 생성 |
 | [definition_reads.go](../../internal/server/definition_reads.go#L89) | 저장된 관계 간선 조회 |
-| [authority.go](../../internal/server/authority.go#L11) | 외부 HTTP 작업 승인 |
+| [server.go](../../internal/server/server.go#L54) | HTTP 고정 `local` attribution |
 
 문서 검증은 인용한 소스와 테스트 코드의 정적 대조, 상대 링크 파일 존재 및 줄 번호 범위 확인으로 한정한다. 제품 코드는 수정하지 않으며 다른 작성자의 문서와 기존 변경도 이 문서의 작성 범위에 포함하지 않는다.
 

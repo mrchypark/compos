@@ -34,7 +34,7 @@ a workspace member unless explicitly bound.
 
 Capability grants are administrative control-plane operations. The server
 accepts them only from authenticated principals configured in
-`COMPOS_ADMIN_PRINCIPALS`, or from cluster operator calls carrying
+`COMPOS_ADMIN_PRINCIPALS`, or from trusted control-plane calls carrying
 `COMPOS_ADMIN_BEARER_TOKEN`.
 
 The first executable capability scope is:

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mrchypark/compos/internal/kernel"
 	"github.com/mrchypark/compos/internal/reactiverule"
 	"github.com/mrchypark/compos/internal/store"
@@ -200,22 +199,12 @@ func (s *Server) dispatchReactiveRules(ctx context.Context) error {
 			detail = commandErr.Error()
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		var authorityErr *kernel.CommandError
-		authorityUnavailable := errors.As(commandErr, &authorityErr) && authorityErr.Outcome == "external_authority_unavailable"
 		nextAttempt := item.attempt + 1
-		if authorityUnavailable {
-			// No command was dispatched; dependency retries must not consume the circuit budget.
-			nextAttempt = item.attempt
-		}
 		requestID := "automation-dispatch:" + item.id + ":" + strconv.Itoa(nextAttempt) + ":" + status
-		if authorityUnavailable {
-			// The counter stays unchanged, so each retry needs a fresh Rhiza mutation ID.
-			requestID += ":" + uuid.NewString()
-		}
 		if err := s.store.Exec(ctx, requestID, `UPDATE reactive_rule_evaluations SET dispatch_status=?,dispatch_attempt_count=?,last_dispatch_error_code=?,last_dispatch_error_message=?,updated_at=? WHERE id=? AND dispatch_attempt_count=? AND dispatch_status IN ('pending','retryable_failed')`, status, nextAttempt, code, detail, now, item.id, item.attempt); err != nil {
 			return err
 		}
-		if commandErr != nil && !authorityUnavailable {
+		if commandErr != nil {
 			if err := s.openAutomationCircuitIfThreshold(ctx, item.workspaceID, item.ruleID, item.revisionID, item.failureThreshold); err != nil {
 				return err
 			}

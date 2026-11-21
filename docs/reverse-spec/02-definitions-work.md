@@ -9,17 +9,17 @@
 
 이 문서는 Task·Function·Workflow·AgentDefinition·Event·Ontology 정의의 발행, Work의 개설·배정·제출·취소, 실행 결과 처리와 조회 상태 복원을 설명한다. Task는 수행 계약이고 Work는 특정 Task revision을 참조하는 실행 stream이다. 일반 업무 객체는 별도의 동적 객체 저장소에 존재한다.
 
-외부 identity·인가와 workspace 실행 범위의 전체 계약은 [03. 인증과 권한](03-auth-permissions.md), ReactiveRule과 외부 이벤트 처리의 전체 계약은 [04. 자동화와 외부 연동](04-automation-integrations.md)을 함께 읽는다. 일반 객체·관계는 [01. 객체와 관계](01-objects-relations.md), 저장소·배포·복구는 [05. 저장소와 배포](05-storage-deployment.md), CLI·공통 API는 [06. CLI·API·검색](06-cli-api-search.md)의 범위다. 여기서는 이 실행 모델이 호출하는 경계만 설명한다. 사실 판단 근거는 아래에 연결한 현재 소스이며, 다른 문서의 더 넓은 설명을 구현 사실로 가져오지 않는다.
+HTTP 고정 `local` attribution과 actor 기록의 공통 계약은 [00. 실행 구조](00-overview.md), ReactiveRule과 외부 이벤트 처리의 전체 계약은 [04. 자동화와 외부 연동](04-automation-integrations.md)을 함께 읽는다. 일반 객체·관계는 [01. 객체와 관계](01-objects-relations.md), 저장소·배포·복구는 [05. 저장소와 배포](05-storage-deployment.md), HTTP API는 [06. API·검색](06-api-search.md)의 범위다. 여기서는 이 실행 모델이 호출하는 경계만 설명한다. 사실 판단 근거는 아래에 연결한 현재 소스이며, 다른 문서의 더 넓은 설명을 구현 사실로 가져오지 않는다.
 
 현재 구현을 다음처럼 일반화하면 안 된다.
 
 - Task·Function 정의 자체를 Journal이나 `object_instances`에 저장한다고 설명하지 않는다.
 - Work의 조회 상태를 복원하는 것과 업무 객체 전체를 이벤트로 복원하는 것을 동일시하지 않는다.
-- Task의 Function 허용 목록, actor 대행 권한, 현재 참여자 검사를 하나의 capability로 취급하지 않는다.
+- Task의 Function 허용 목록, requested actor attribution, 현재 참여자 검사를 같은 통제로 취급하지 않는다.
 - `constraints`, Agent의 policy 객체, timeout·retry 설정이 모두 Compos 안에서 실행되는 정책이라고 설명하지 않는다.
 - 정의 발행을 포함한 모든 command가 Journal fact를 추가한다고 설명하지 않는다.
 
-근거: [정의 저장](../../internal/kernel/work.go#L27), [실행 기록](../../internal/kernel/work.go#L1890), [객체 갱신](../../internal/kernel/executor.go#L495), [actor 검사](../../internal/kernel/authority.go#L24).
+근거: [정의 저장](../../internal/kernel/work.go#L27), [실행 기록](../../internal/kernel/work.go#L1890), [객체 갱신](../../internal/kernel/executor.go#L495), [actor attribution](../../internal/kernel/actor.go#L5).
 
 ## 2. 엔터티와 상태
 
@@ -91,7 +91,7 @@ Ontology의 cardinality는 `one_to_one`, `one_to_many`, `many_to_one`, `many_to_
 - `constraints`: 최대 64개의 비어 있지 않은 문자열이다. 이 목록을 표현식으로 평가해 업무를 차단하는 실행기는 확인되지 않는다.
 - `completion.kind=object_state_equals`: `state`가 필수이며 입력 스키마가 string `object_id`를 필수로 요구해야 한다. 완료 판정 시 현재 객체의 `state_key`를 읽는다.
 - `completion.kind=submission_valid`: `state`를 받지 않는다. 제출 데이터는 적용되는 출력 스키마로 검증한다. 일반 제출과 Workflow route 제출의 완료 시점은 다르다.
-- `capability_policy`: 키는 `allowed_function_revision_ids` 하나다. 제공하면 1~128개의 Function revision ID를 요구하고, 호출 시 포함 여부를 검사한다. 생략하면 이 허용 목록 검사는 생략하지만 actor·참여자·입력 검사는 남는다.
+- `capability_policy`: 키는 `allowed_function_revision_ids` 하나다. 제공하면 1~128개의 Function revision ID를 요구하고, 호출 시 포함 여부를 검사한다. 생략하면 이 허용 목록 검사는 생략하지만 참여자와 입력 검사는 남는다. 이 정책은 Task 실행 범위를 제한하며 사용자 인가 정책이 아니다.
 - `ontology_context`: `ontology_revision_ids`, `concept_refs`를 받으며 각각 문자열 목록 최대 128개다. revision ID는 같은 workspace의 Ontology 정의를 참조해야 한다. concept 문자열 목록 자체를 Ontology concept ID에 대조하는 별도 검사는 참조 검사에서 수행하지 않는다.
 - `failure_policy`: `on_function_failed`, `on_agent_failed`에 `action=route|cancel`을 둔다. route는 human participant를 요구한다. cancel은 participant를 받지 않는다. 선택 `reason`이 비어 있으면 실행 처리에서 기본 이유를 사용한다. 정책이 없으면 실패 사실만으로 Work를 자동 취소하거나 재배정하지 않는다.
 
@@ -109,17 +109,17 @@ credential pin은 connection ID와 양의 안전 정수 revision을 사용한다
 
 ## 4. Command와 HTTP 계약
 
-### 4.1 공통 envelope·인증·멱등성
+### 4.1 공통 envelope·고정 local attribution·멱등성
 
 Kernel command 구조는 `command_id`, `idempotency_key`, `workspace_id`, 선택 `requested_actor`, `command_type`, `target`, `preconditions`, `payload`, `causation`이다. target은 `aggregate_type`과 선택 `aggregate_id`, precondition은 aggregate 종류·ID·expected version을 담는다. causation 구조에는 `source`, 선택 `attempt_id`, `event_id`, `automation`이 있다. 구조체에 존재한다는 사실과 모든 필드가 항상 필수라는 주장은 구분한다.
 
 등록 command 종류, 필수 ID, target 종류·ID 요구, payload schema를 검사한다. Work command에는 registry가 요구하는 Work version precondition이 없다. 일반 precondition 검사도 object type/instance/relation, relation definition, reactive rule을 대상으로 하므로 `work_stream` precondition을 임의로 추가하면 지원되지 않는다. Work version은 Journal 순서·검사로 관리한다.
 
-자체 membership/capability는 없다. 주입된 외부 AuthorizeCommand가 명령 전체를 승인하고 actor를 반환해야 한다. actor와 requested_actor가 일치해야 하며 user actor는 principal과 같아야 한다. Task binding·Work 배정은 외부 인가를 발급하지 않는다. service/automation 형식 허용을 Grant의 서비스 지원으로 해석하지 않는다. [권한 경계](../../internal/kernel/authority.go#L10)
+HTTP 서버는 인증 gate 없이 요청을 route로 전달하고 모든 요청을 고정 principal `local`로 기록한다. caller identity를 받지 않으며 workspace·command별 허용 정책은 없다. Kernel의 `requested_actor`는 비어 있지 않은 `type`과 `id`를 effective actor로 기록하며, actor type 제한이나 principal 일치 검사를 적용하지 않는다. ReactiveRule·Workflow도 같은 `Execute` 경로를 사용한다. Task binding·Work 배정이나 저장된 principal은 workspace 인가를 발급하지 않는다. [HTTP 처리](../../internal/server/server.go#L54), [actor 해석](../../internal/kernel/actor.go#L5), [실행 입구](../../internal/kernel/executor.go#L59)
 
-멱등성 범위는 workspace/principal/idempotency key다. 외부 명령 승인을 중복 조회 전에 검사한다. 기존 key가 있으면 command ID·종류·payload·target·preconditions·causation·requested actor를 비교한다. 같으면 저장 영수증을 `duplicate`로 반환하고 다르면 `idempotency_conflict`다. command ID만 또는 payload만 같으면 충분하다고 설명하지 않는다. command ledger는 적용된 command의 영수증을 저장하므로 모든 실패 시도를 저장하는 전면 감사 로그도 아니다.
+멱등성 범위는 workspace/principal/idempotency key다. actor attribution을 확인한 뒤 중복을 조회하며 명령별 권한 승인은 없다. 기존 key가 있으면 command ID·종류·payload·target·preconditions·causation·requested actor를 비교한다. 같으면 저장 영수증을 `duplicate`로 반환하고 다르면 `idempotency_conflict`다. command ID만 또는 payload만 같으면 충분하다고 설명하지 않는다. command ledger는 적용된 command의 영수증을 저장하므로 모든 실패 시도를 저장하는 전면 감사 로그도 아니다.
 
-근거: [타입](../../internal/kernel/types.go#L8), [등록 검증](../../internal/kernel/registry.go#L117), [실행·중복 경계](../../internal/kernel/executor.go#L59), [actor 검사](../../internal/kernel/authority.go#L24), [preconditions](../../internal/kernel/executor.go#L144), [Rhiza 중복 처리](../../internal/kernel/rhiza.go#L554).
+근거: [타입](../../internal/kernel/types.go#L8), [등록 검증](../../internal/kernel/registry.go#L117), [실행·중복 경계](../../internal/kernel/executor.go#L59), [actor 검사](../../internal/kernel/actor.go#L5), [preconditions](../../internal/kernel/executor.go#L129), [Rhiza 중복 처리](../../internal/kernel/rhiza.go#L554).
 
 ### 4.2 공개 command
 
@@ -155,7 +155,7 @@ work.route의 participant는 정확히 `kind`, `id`를 받는다. kind는 `human
 
 ### 4.4 HTTP 읽기와 실행 응답
 
-아래 workspace 경로의 접두사는 `/api/v1/workspaces/{workspace_id}`다. 외부 요청·명령 승인 조건은 03장과 authority 코드에 따른다.
+아래 workspace 경로의 접두사는 `/api/v1/workspaces/{workspace_id}`다. HTTP 요청은 인증 없이 들어오며 고정 principal `local`을 사용한다. workspace permission 판정은 없다.
 
 | 경로 | 현재 응답·제한 |
 |---|---|
@@ -163,7 +163,7 @@ work.route의 participant는 정확히 `kind`, `id`를 받는다. kind는 `human
 | `GET /api/v1/kernel/command-registry` | 공개 Definition 목록을 반환한다. 내부 결과 command와 기한 command는 숨긴다. |
 | `GET …/definitions` | `kind=task|function|workflow`, 선택 `family_id`, `limit` 기본 50/범위 1~100, `offset` 기본 0. family 오름차순·revision 내림차순·id 순으로 정렬하며 최신 revision만 고르는 API가 아니다. `page.next_cursor`는 다음 offset 또는 null이다. |
 | `GET …/definitions/{revision_id}` | 같은 세 kind만 조회한다. Event/Ontology/participant를 저장할 수 있다는 사실이 이 endpoint에서 조회 가능함을 뜻하지 않는다. 미존재는 404다. |
-| `GET …/work` | 현재 principal의 human inbox다. 최신 배정·미제출 조건은 `workflow_route_id`별로 검사한다. terminal Work는 제외한다. `limit` 기본 50/범위 1~100, `offset` 기본 0이며 전체 Work 목록이 아니다. |
+| `GET …/work` | 모든 human 참여자에게 배정된 미완료 Work를 반환하며 실제 참여자 ID를 표시한다. 최신 배정·미제출 조건은 `workflow_route_id`별로 검사한다. terminal Work는 제외한다. `limit` 기본 50/범위 1~100, `offset` 기본 0이며 전체 Work 목록이 아니다. |
 | `GET …/work/{stream_id}` | Journal과 Task spec으로 상세를 계산한다. facts가 없으면 404다. task, context, version, status, owner, assignee, assignments, handoffs, submissions, executions, 활성 ID 목록, completion/cancellation/deadline, facts를 반환한다. |
 | `GET …/events` | `domain.event.emitted`를 created_at/id 순으로 최대 1,000개 조회한다. 범용 Journal 조회 API는 아니다. |
 | `POST /internal/v1/conductor/callbacks` | 외부 결과를 수신하고 callback evidence와 내부 결과 command로 환원한다. 일반 사용자 command endpoint와 다르다. |
@@ -190,7 +190,7 @@ Definition 조회는 `ReadLocal`과 `canonical_stale_bounded` consistency를 사
 
 command actor는 `user|service|automation`이고 Journal participant는 `human|agent|automation`이다. 기본/user actor는 human principal, automation actor는 automation ID, service actor는 agent ID로 변환한다. `requested_actor.type=agent`를 직접 받는 계약이 아니다.
 
-제출·Function 호출은 해당 route의 현재 참여자와 일치해야 한다. `work.route`·`work.cancel`에는 이와 동일한 현재 참여자 검사가 직접 적용되지 않는다. 그 command의 공통 외부 command 승인·actor 일치과 개별 상태 검사를 설명해야 하며, “모든 Work command는 담당자만 실행한다”는 일반화는 부정확하다.
+제출·Function 호출은 해당 route의 현재 참여자와 일치해야 한다. 이는 Work 도메인 precondition이며 HTTP/workspace 권한 정책이 아니다. `work.route`·`work.cancel`에는 이와 동일한 현재 참여자 검사가 직접 적용되지 않는다. “모든 Work command는 담당자만 실행한다”는 일반화는 부정확하다.
 
 agent 배정은 `kind=participant` spec과 Task spec을 읽고 `agent.requested`를 함께 기록한다. 정의·Task·입력·handler 및 선택 credential·실행 정책을 외부 요청 payload에 넣는다. 이 배정이 agent tools를 Compos 안에서 자동 실행하거나 LLM을 직접 구동하는 것은 아니다.
 

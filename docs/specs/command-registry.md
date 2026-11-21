@@ -73,8 +73,8 @@ registered, but are not automation actions in v1.
 `object_type.schema_evolve` is not an automation action.
 
 Workspace creation is intentionally absent from this registry.
-`POST /api/v1/workspaces` and `compos workspace create` are control-plane
-provisioning surfaces, not Kernel commands.
+`POST /api/v1/workspaces` is a control-plane provisioning surface, not a Kernel
+command.
 
 ## Object-Type Noun Contract
 
@@ -88,10 +88,11 @@ provisioning surfaces, not Kernel commands.
 }
 ```
 
-`key` is the plural slug and the dynamic CLI dispatch key. `singular` is used
-for prose about one object, while `plural` names the collection command group.
-All three values are explicit. The registry and CLI must not accept a separate
-`slug`, infer either name, accept an alias, or fall back to a singular key. No
+`key` is the plural slug and the dynamic command-surface dispatch key.
+`singular` is used for prose about one object, while `plural` names the
+collection group. All three values are explicit. The registry and command
+surface must not accept a separate `slug`, infer either name, accept an alias,
+or fall back to a singular key. No
 pre-existing user-defined object types are migrated. New definitions use plural
 keys such as `contracts`; built-ins use `people` and
 `companies`.

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -64,7 +63,7 @@ func TestConductorOutboxDeliveryPublishesOnlyExecutionRequests(t *testing.T) {
 	}
 
 	server := newTestServer(db)
-	if err := server.EnableConductor(conductor.URL, "secret", "callback-secret"); err != nil {
+	if err := server.EnableConductor(conductor.URL, "secret"); err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
@@ -379,7 +378,7 @@ func TestConductorCallbackIsAuthenticatedWorkspaceScopedAndIdempotent(t *testing
 	outbound := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
 	defer outbound.Close()
 	server := newTestServer(db)
-	if err := server.EnableConductor(outbound.URL, "service-secret", "callback-secret"); err != nil {
+	if err := server.EnableConductor(outbound.URL, "service-secret"); err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
@@ -400,23 +399,19 @@ func TestConductorCallbackIsAuthenticatedWorkspaceScopedAndIdempotent(t *testing
 		"provider_key": "native.invoke", "provider_run_ref": "exec_1", "handler_version": "1", "runtime_status": "failed", "attempt_count": 1,
 		"result": json.RawMessage(`{"nested":{"b":2,"a":9007199254740993}}`), "error_class": "provider_4xx", "error_detail": "rejected", "occurred_at": now,
 	}
-	call := func(token string, body map[string]any) *httptest.ResponseRecorder {
+	call := func(body map[string]any) *httptest.ResponseRecorder {
 		payload, _ := json.Marshal(body)
 		req := httptest.NewRequest(http.MethodPost, "/internal/v1/conductor/callbacks", strings.NewReader(string(payload)))
-		req.Header.Set("Authorization", "Bearer "+token)
 		recorder := httptest.NewRecorder()
 		server.ServeHTTP(recorder, req)
 		return recorder
-	}
-	if response := call("wrong", callback); response.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong token status=%d body=%s", response.Code, response.Body.String())
 	}
 	wrongIdentity := make(map[string]any, len(callback))
 	for key, value := range callback {
 		wrongIdentity[key] = value
 	}
 	wrongIdentity["callback_id"], wrongIdentity["provider_key"] = "cb_wrong_identity", "other.handler"
-	if response := call("callback-secret", wrongIdentity); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "execution_identity_conflict") {
+	if response := call(wrongIdentity); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "execution_identity_conflict") {
 		t.Fatalf("wrong identity status=%d body=%s", response.Code, response.Body.String())
 	}
 	if _, err := db.DB().Exec(`CREATE TRIGGER fail_conductor_inbound BEFORE INSERT ON adapter_inbound_events BEGIN SELECT RAISE(ABORT, 'forced insert failure'); END`); err != nil {
@@ -427,16 +422,16 @@ func TestConductorCallbackIsAuthenticatedWorkspaceScopedAndIdempotent(t *testing
 		storageFailure[key] = value
 	}
 	storageFailure["callback_id"] = "cb_storage_failure"
-	if response := call("callback-secret", storageFailure); response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "idempotency_conflict") {
+	if response := call(storageFailure); response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "idempotency_conflict") {
 		t.Fatalf("storage failure status=%d body=%s", response.Code, response.Body.String())
 	}
 	if _, err := db.DB().Exec(`DROP TRIGGER fail_conductor_inbound`); err != nil {
 		t.Fatal(err)
 	}
-	if response := call("callback-secret", callback); response.Code != http.StatusAccepted {
+	if response := call(callback); response.Code != http.StatusAccepted {
 		t.Fatalf("callback status=%d body=%s", response.Code, response.Body.String())
 	}
-	if response := call("callback-secret", callback); response.Code != http.StatusOK {
+	if response := call(callback); response.Code != http.StatusOK {
 		t.Fatalf("duplicate callback status=%d body=%s", response.Code, response.Body.String())
 	}
 	converged := make(map[string]any, len(callback))
@@ -444,7 +439,7 @@ func TestConductorCallbackIsAuthenticatedWorkspaceScopedAndIdempotent(t *testing
 		converged[key] = value
 	}
 	converged["callback_id"] = "cb_exec_same"
-	if response := call("callback-secret", converged); response.Code != http.StatusAccepted {
+	if response := call(converged); response.Code != http.StatusAccepted {
 		t.Fatalf("equivalent terminal callback status=%d body=%s", response.Code, response.Body.String())
 	}
 	conflict := make(map[string]any, len(callback))
@@ -452,7 +447,7 @@ func TestConductorCallbackIsAuthenticatedWorkspaceScopedAndIdempotent(t *testing
 		conflict[key] = value
 	}
 	conflict["callback_id"], conflict["error_detail"] = "cb_exec_conflict", "different"
-	if response := call("callback-secret", conflict); response.Code != http.StatusConflict {
+	if response := call(conflict); response.Code != http.StatusConflict {
 		t.Fatalf("conflicting terminal callback status=%d body=%s", response.Code, response.Body.String())
 	}
 	changed := make(map[string]any, len(callback))
@@ -460,7 +455,7 @@ func TestConductorCallbackIsAuthenticatedWorkspaceScopedAndIdempotent(t *testing
 		changed[key] = value
 	}
 	changed["attempt_count"] = 2
-	if response := call("callback-secret", changed); response.Code != http.StatusConflict {
+	if response := call(changed); response.Code != http.StatusConflict {
 		t.Fatalf("changed callback status=%d body=%s", response.Code, response.Body.String())
 	}
 	unknown := make(map[string]any, len(callback))
@@ -468,7 +463,7 @@ func TestConductorCallbackIsAuthenticatedWorkspaceScopedAndIdempotent(t *testing
 		unknown[key] = value
 	}
 	unknown["callback_id"], unknown["execution_request_id"] = "cb_unknown", "missing"
-	if response := call("callback-secret", unknown); response.Code != http.StatusNotFound {
+	if response := call(unknown); response.Code != http.StatusNotFound {
 		t.Fatalf("unknown invocation status=%d body=%s", response.Code, response.Body.String())
 	}
 
@@ -516,7 +511,6 @@ func TestRhizaConductorCallbackRejectsChangedReducedCallback(t *testing.T) {
 
 	server := newTestServer(db)
 	defer server.Close()
-	server.conductorCallbackToken = "callback-secret"
 	callback := map[string]any{
 		"callback_id": "cb_exec_1", "workspace_id": "wks_1", "execution_request_id": "inv_1", "execution_id": "exec_1",
 		"provider_key": "native.invoke", "provider_run_ref": "exec_1", "handler_version": "1", "runtime_status": "failed", "attempt_count": 1,
@@ -525,46 +519,11 @@ func TestRhizaConductorCallbackRejectsChangedReducedCallback(t *testing.T) {
 	call := func(body map[string]any) *httptest.ResponseRecorder {
 		payload, _ := json.Marshal(body)
 		req := httptest.NewRequest(http.MethodPost, "/internal/v1/conductor/callbacks", strings.NewReader(string(payload)))
-		req.Header.Set("Authorization", "Bearer callback-secret")
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, req)
 		return response
 	}
-	savedAuthorizer := server.kernel.AuthorizeCommand
-	server.kernel.AuthorizeCommand = func(context.Context, string, kernel.Command) (kernel.Actor, error) {
-		return kernel.Actor{}, kernel.ErrAuthorizationDenied
-	}
-	deniedCallback := make(map[string]any, len(callback))
-	for key, value := range callback {
-		deniedCallback[key] = value
-	}
-	deniedCallback["callback_id"] = "cb_explicitly_denied"
-	if response := call(deniedCallback); response.Code != http.StatusForbidden {
-		t.Fatalf("explicit denial status=%d body=%s", response.Code, response.Body.String())
-	}
-	var deniedStatus string
-	if err := db.ReadRow(ctx, store.ReadLinearizable, `SELECT status FROM adapter_inbound_events WHERE inbound_event_id='cb_explicitly_denied'`).Scan(&deniedStatus); err != nil || deniedStatus != "rejected" {
-		t.Fatalf("explicit denial status=%s err=%v", deniedStatus, err)
-	}
-	server.kernel.AuthorizeCommand = func(context.Context, string, kernel.Command) (kernel.Actor, error) {
-		return kernel.Actor{}, context.DeadlineExceeded
-	}
-	if response := call(callback); response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"retryable":true`) {
-		t.Fatalf("authority outage status=%d body=%s", response.Code, response.Body.String())
-	}
-	var pendingStatus string
-	if err := db.ReadRow(ctx, store.ReadLinearizable, `SELECT status FROM adapter_inbound_events WHERE inbound_event_id='cb_exec_1'`).Scan(&pendingStatus); err != nil || pendingStatus != "appended" {
-		t.Fatalf("outage callback status=%s err=%v", pendingStatus, err)
-	}
-	var pendingErr *kernel.CommandError
-	if err := server.reducePendingConductorCallbacks(ctx); !errors.As(err, &pendingErr) || !pendingErr.Retryable {
-		t.Fatalf("pending recovery error=%v", err)
-	}
-	if err := db.ReadRow(ctx, store.ReadLinearizable, `SELECT status FROM adapter_inbound_events WHERE inbound_event_id='cb_exec_1'`).Scan(&pendingStatus); err != nil || pendingStatus != "appended" {
-		t.Fatalf("recovery outage status=%s err=%v", pendingStatus, err)
-	}
-	server.kernel.AuthorizeCommand = savedAuthorizer
-	if response := call(callback); response.Code != http.StatusOK {
+	if response := call(callback); response.Code != http.StatusAccepted {
 		t.Fatalf("callback status=%d body=%s", response.Code, response.Body.String())
 	}
 	reordered := make(map[string]any, len(callback))
@@ -611,7 +570,7 @@ func TestConductorEquivalentInvalidResultConvergesAfterKernelNormalization(t *te
 	s, handler, execute := newWorkflowTestRuntime(t)
 	outbound := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
 	defer outbound.Close()
-	if err := handler.EnableConductor(outbound.URL, "service-secret", "callback-secret"); err != nil {
+	if err := handler.EnableConductor(outbound.URL, "service-secret"); err != nil {
 		t.Fatal(err)
 	}
 	function := execute("cmd_normalized_function", "spec.publish", "spec_revision", nil, map[string]any{
@@ -644,7 +603,6 @@ func TestConductorEquivalentInvalidResultConvergesAfterKernelNormalization(t *te
 	call := func(body map[string]any) *httptest.ResponseRecorder {
 		raw, _ := json.Marshal(body)
 		req := httptest.NewRequest(http.MethodPost, "/internal/v1/conductor/callbacks", strings.NewReader(string(raw)))
-		req.Header.Set("Authorization", "Bearer callback-secret")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, req)
 		return response
@@ -705,30 +663,26 @@ func TestConductorComposConnectorReadsAreAuthenticatedAndWorkspaceScoped(t *test
 	}
 	outbound := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
 	defer outbound.Close()
-	if err := server.EnableConductor(outbound.URL, "service-secret", "callback-secret"); err != nil {
+	if err := server.EnableConductor(outbound.URL, "service-secret"); err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
 
-	call := func(path, token, workspace string) *httptest.ResponseRecorder {
+	call := func(path, workspace string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("X-Conductor-Workspace-Id", workspace)
 		recorder := httptest.NewRecorder()
 		server.ServeHTTP(recorder, req)
 		return recorder
 	}
 	path := "/v1/connector/objects/orders/records/" + objectReceipt.Aggregate.ID
-	if response := call(path, "wrong", "wks_1"); response.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong token status=%d", response.Code)
-	}
-	if response := call(path, "service-secret", "wks_other"); response.Code != http.StatusNotFound {
+	if response := call(path, "wks_other"); response.Code != http.StatusNotFound {
 		t.Fatalf("wrong workspace status=%d body=%s", response.Code, response.Body.String())
 	}
-	if response := call(path, "service-secret", "wks_1"); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"ready"`) {
+	if response := call(path, "wks_1"); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"ready"`) {
 		t.Fatalf("record status=%d body=%s", response.Code, response.Body.String())
 	}
-	if response := call("/v1/connector/objects/orders/schema", "service-secret", "wks_1"); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"key":"orders"`) {
+	if response := call("/v1/connector/objects/orders/schema", "wks_1"); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"key":"orders"`) {
 		t.Fatalf("schema status=%d body=%s", response.Code, response.Body.String())
 	}
 }

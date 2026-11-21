@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,47 +52,6 @@ func TestReactiveRuleEmitsOneKernelCommandAndRecoversByEvaluation(t *testing.T) 
 		t.Fatal(err)
 	}
 	execute("cmd_automation_seed", "object.create", "object_instance", nil, map[string]any{"object_type_key": "notes", "title": "Seed", "values": map[string]any{}})
-	savedAuthorizer := handler.kernel.AuthorizeCommand
-	handler.kernel.AuthorizeCommand = func(context.Context, string, kernel.Command) (kernel.Actor, error) {
-		return kernel.Actor{}, context.DeadlineExceeded
-	}
-	for range 4 {
-		if err := handler.advanceReactiveRules(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var dispatch, errorCode, ruleStatus, ruleCircuit string
-	if err := s.DB().QueryRow(`SELECT dispatch_status,last_dispatch_error_code FROM reactive_rule_evaluations WHERE rule_revision_id=? AND predicate_result='matched'`, revisionID).Scan(&dispatch, &errorCode); err != nil || dispatch != "retryable_failed" || errorCode != "external_authority_unavailable" {
-		t.Fatalf("outage dispatch=%s code=%s err=%v", dispatch, errorCode, err)
-	}
-	if err := s.DB().QueryRow(`SELECT status,circuit_breaker_status FROM reactive_rules WHERE id=?`, ruleID).Scan(&ruleStatus, &ruleCircuit); err != nil || ruleStatus != "active" || ruleCircuit != "closed" {
-		t.Fatalf("authority outage changed rule=%s circuit=%s err=%v", ruleStatus, ruleCircuit, err)
-	}
-	var attempts int
-	if err := s.DB().QueryRow(`SELECT dispatch_attempt_count FROM reactive_rule_evaluations WHERE rule_revision_id=? AND predicate_result='matched'`, revisionID).Scan(&attempts); err != nil || attempts != 0 {
-		t.Fatalf("authority outages consumed circuit budget: attempts=%d err=%v", attempts, err)
-	}
-	// A subsequent policy failure counts once, even after outages exceed the threshold.
-	// Permit the disable command so a premature circuit opening cannot hide behind denial.
-	handler.kernel.AuthorizeCommand = func(ctx context.Context, principal string, c kernel.Command) (kernel.Actor, error) {
-		if c.CommandType == "reactive_rule.disable" {
-			return savedAuthorizer(ctx, principal, c)
-		}
-		return kernel.Actor{}, kernel.ErrAuthorizationDenied
-	}
-	if err := handler.dispatchReactiveRules(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.DB().QueryRow(`SELECT dispatch_attempt_count,dispatch_status FROM reactive_rule_evaluations WHERE rule_revision_id=? AND predicate_result='matched'`, revisionID).Scan(&attempts, &dispatch); err != nil || attempts != 1 || dispatch != "rejected" {
-		t.Fatalf("policy failure after outage: attempts=%d dispatch=%s err=%v", attempts, dispatch, err)
-	}
-	if err := s.DB().QueryRow(`SELECT status,circuit_breaker_status FROM reactive_rules WHERE id=?`, ruleID).Scan(&ruleStatus, &ruleCircuit); err != nil || ruleStatus != "active" || ruleCircuit != "closed" {
-		t.Fatalf("prior authority outages opened circuit: rule=%s circuit=%s err=%v", ruleStatus, ruleCircuit, err)
-	}
-	if _, err := s.DB().Exec(`UPDATE reactive_rule_evaluations SET dispatch_status='pending' WHERE rule_revision_id=? AND predicate_result='matched'`, revisionID); err != nil {
-		t.Fatal(err)
-	}
-	handler.kernel.AuthorizeCommand = savedAuthorizer
 	if err := handler.advanceReactiveRules(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -109,8 +69,13 @@ func TestReactiveRuleEmitsOneKernelCommandAndRecoversByEvaluation(t *testing.T) 
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := handler.advanceReactiveRules(ctx); err != nil {
-		t.Fatal(err)
+	var dispatch, commandID string
+	if err := s.DB().QueryRow(`SELECT dispatch_status,emitted_command_id FROM reactive_rule_evaluations WHERE rule_revision_id=? AND predicate_result='matched'`, revisionID).Scan(&dispatch, &commandID); err != nil || dispatch != "applied" || commandID == "" {
+		t.Fatalf("dispatch=%s command=%s err=%v", dispatch, commandID, err)
+	}
+	var requestedActor, effectiveActor, causation string
+	if err := s.DB().QueryRow(`SELECT requested_actor_json,effective_actor_json,causation_json FROM command_ledger WHERE command_id=?`, commandID).Scan(&requestedActor, &effectiveActor, &causation); err != nil || requestedActor != `{"type":"automation","id":"auto-followup"}` || effectiveActor != requestedActor || !strings.Contains(causation, `"source":"automation"`) {
+		t.Fatalf("requested=%s effective=%s causation=%s err=%v", requestedActor, effectiveActor, causation, err)
 	}
 	var followups int
 	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM object_instances WHERE workspace_id='wks_1' AND title='Follow-up'`).Scan(&followups); err != nil || followups != 1 {
@@ -119,16 +84,15 @@ func TestReactiveRuleEmitsOneKernelCommandAndRecoversByEvaluation(t *testing.T) 
 	if _, err := s.DB().Exec(`UPDATE reactive_rule_evaluations SET dispatch_status='pending',dispatch_attempt_count=0 WHERE rule_revision_id=? AND predicate_result='matched'`, revisionID); err != nil {
 		t.Fatal(err)
 	}
-	handler.kernel.AuthorizeCommand = func(context.Context, string, kernel.Command) (kernel.Actor, error) {
-		return kernel.Actor{}, kernel.ErrAuthorizationDenied
-	}
 	if err := handler.dispatchReactiveRules(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DB().QueryRow(`SELECT dispatch_status,last_dispatch_error_code FROM reactive_rule_evaluations WHERE rule_revision_id=? AND predicate_result='matched'`, revisionID).Scan(&dispatch, &errorCode); err != nil || dispatch != "rejected" || errorCode != "forbidden" {
-		t.Fatalf("explicit denial dispatch=%s code=%s err=%v", dispatch, errorCode, err)
+	if err := s.DB().QueryRow(`SELECT dispatch_status FROM reactive_rule_evaluations WHERE rule_revision_id=? AND predicate_result='matched'`, revisionID).Scan(&dispatch); err != nil || dispatch != "applied" {
+		t.Fatalf("duplicate dispatch=%s err=%v", dispatch, err)
 	}
-	handler.kernel.AuthorizeCommand = savedAuthorizer
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM object_instances WHERE workspace_id='wks_1' AND title='Follow-up'`).Scan(&followups); err != nil || followups != 1 {
+		t.Fatalf("recovered followups=%d err=%v", followups, err)
+	}
 	if _, err := s.DB().Exec(`UPDATE reactive_rule_evaluations SET dispatch_status='rejected',dispatch_attempt_count=3 WHERE rule_revision_id=?`, revisionID); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +153,7 @@ func TestProjectionEventsAndReactiveRulesKeepMultiEffectParentEventsPaired(t *te
 	if _, err := s.DB().Exec(`INSERT INTO reactive_rules(id,workspace_id,automation_id,rule_key,name,status,current_revision_id,version,activation_event_cursor,circuit_breaker_status,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,'active',?,1,?,'closed',?,?,?,?)`, "rule_multi", "wks_1", "auto_multi", "multi", "multi", "revision_multi", strconv.FormatInt(sequence-1, 10), now, now, "dev", "dev"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB().Exec(`INSERT INTO reactive_rule_revisions(id,workspace_id,rule_id,automation_id,definition_schema_version,definition_hash,requested_actor_json,permission_policy,trigger_json,predicates_json,action_json,idempotency_json,limits_json,created_at,created_by_principal_id) VALUES(?,?,?,?,1,?,'{}','owner_principal',?,'{}','{}','{}',?,?,'dev')`, "revision_multi", "wks_1", "rule_multi", "auto_multi", "sha256:multi", `{"source":"kernel_canonical_event","event_type":"object.created"}`, `{"max_recursion_depth":1}`, now); err != nil {
+	if _, err := s.DB().Exec(`INSERT INTO reactive_rule_revisions(id,workspace_id,rule_id,automation_id,definition_schema_version,definition_hash,requested_actor_json,trigger_json,predicates_json,action_json,idempotency_json,limits_json,created_at,created_by_principal_id) VALUES(?,?,?,?,1,?,'{}',?,'{}','{}','{}',?,?,'dev')`, "revision_multi", "wks_1", "rule_multi", "auto_multi", "sha256:multi", `{"source":"kernel_canonical_event","event_type":"object.created"}`, `{"max_recursion_depth":1}`, now); err != nil {
 		t.Fatal(err)
 	}
 	candidates, err := handler.reactiveRuleCandidates(ctx)
@@ -231,13 +195,13 @@ func TestRhizaProjectionEventsAndReactiveRulesKeepMultiEffectParentEventsPaired(
 	}
 	sequence, now, one := int64(1), "2026-01-01T00:00:00Z", int64(1)
 	if err := s.ApplyStatements(ctx, "rhiza-multi-pairing", []rhiza.SQLStatement{
-		{SQL: `INSERT INTO command_ledger(command_id,workspace_id,authenticated_principal_id,requested_actor_json,effective_actor_json,actor_context_hash,idempotency_key,command_type,target_json,preconditions_json,causation_json,payload_hash,payload_json,outcome,result_json,effective_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'applied',?,?,?)`, Args: []any{"cmd_rhiza_multi_parent", workspace.Data.ID, "dev", `{"type":"user","id":"dev"}`, `{"type":"user","id":"dev"}`, "sha256:multi", "idem_rhiza_multi_parent", "work.submit", `{"aggregate_type":"work_stream","aggregate_id":"wrk_multi"}`, `[]`, `{"source":"api"}`, "sha256:multi", `{}`, `{"command_id":"cmd_rhiza_multi_parent"}`, now, now}, ExpectedRowsAffected: &one},
+		{SQL: `INSERT INTO command_ledger(command_id,workspace_id,principal_id,requested_actor_json,effective_actor_json,actor_context_hash,idempotency_key,command_type,target_json,preconditions_json,causation_json,payload_hash,payload_json,outcome,result_json,effective_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'applied',?,?,?)`, Args: []any{"cmd_rhiza_multi_parent", workspace.Data.ID, "dev", `{"type":"user","id":"dev"}`, `{"type":"user","id":"dev"}`, "sha256:multi", "idem_rhiza_multi_parent", "work.submit", `{"aggregate_type":"work_stream","aggregate_id":"wrk_multi"}`, `[]`, `{"source":"api"}`, "sha256:multi", `{}`, `{"command_id":"cmd_rhiza_multi_parent"}`, now, now}, ExpectedRowsAffected: &one},
 		{SQL: `INSERT INTO activities VALUES(?,?,?,?,?,?,?,?)`, Args: []any{"act_rhiza_multi_object", workspace.Data.ID, "cmd_rhiza_multi_parent", "object_instance", "obj_rhiza_multi", "object.created", `{"id":"obj_rhiza_multi","title":"Seed"}`, now}, ExpectedRowsAffected: &one},
 		{SQL: `INSERT INTO projection_events(id,workspace_id,command_id,projection_sequence,aggregate_type,aggregate_id,aggregate_version,payload_hash,payload_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, Args: []any{"prj_rhiza_multi_object", workspace.Data.ID, "cmd_rhiza_multi_parent", sequence, "object_instance", "obj_rhiza_multi", 1, "sha256:multi", `{"id":"obj_rhiza_multi","title":"Seed"}`, now}, ExpectedRowsAffected: &one},
 		{SQL: `INSERT INTO activities VALUES(?,?,?,?,?,?,?,?)`, Args: []any{"act_rhiza_multi_relation", workspace.Data.ID, "cmd_rhiza_multi_parent", "object_relation", "rel_rhiza_multi", "relation.linked", `{"id":"rel_rhiza_multi"}`, now}, ExpectedRowsAffected: &one},
 		{SQL: `INSERT INTO projection_events(id,workspace_id,command_id,projection_sequence,aggregate_type,aggregate_id,aggregate_version,payload_hash,payload_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, Args: []any{"prj_rhiza_multi_relation", workspace.Data.ID, "cmd_rhiza_multi_parent", sequence + 1, "object_relation", "rel_rhiza_multi", 1, "sha256:multi", `{"id":"rel_rhiza_multi"}`, now}, ExpectedRowsAffected: &one},
 		{SQL: `INSERT INTO reactive_rules(id,workspace_id,automation_id,rule_key,name,status,current_revision_id,version,activation_event_cursor,circuit_breaker_status,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,'active',?,1,?,'closed',?,?,?,?)`, Args: []any{"rule_rhiza_multi", workspace.Data.ID, "auto_rhiza_multi", "multi", "multi", "revision_rhiza_multi", strconv.FormatInt(sequence-1, 10), now, now, "dev", "dev"}, ExpectedRowsAffected: &one},
-		{SQL: `INSERT INTO reactive_rule_revisions(id,workspace_id,rule_id,automation_id,definition_schema_version,definition_hash,requested_actor_json,permission_policy,trigger_json,predicates_json,action_json,idempotency_json,limits_json,created_at,created_by_principal_id) VALUES(?,?,?,?,1,?,'{}','owner_principal',?,'{}','{}','{}',?,?,'dev')`, Args: []any{"revision_rhiza_multi", workspace.Data.ID, "rule_rhiza_multi", "auto_rhiza_multi", "sha256:multi", `{"source":"kernel_canonical_event","event_type":"object.created"}`, `{"max_recursion_depth":1}`, now}, ExpectedRowsAffected: &one},
+		{SQL: `INSERT INTO reactive_rule_revisions(id,workspace_id,rule_id,automation_id,definition_schema_version,definition_hash,requested_actor_json,trigger_json,predicates_json,action_json,idempotency_json,limits_json,created_at,created_by_principal_id) VALUES(?,?,?,?,1,?,'{}',?,'{}','{}','{}',?,?,'dev')`, Args: []any{"revision_rhiza_multi", workspace.Data.ID, "rule_rhiza_multi", "auto_rhiza_multi", "sha256:multi", `{"source":"kernel_canonical_event","event_type":"object.created"}`, `{"max_recursion_depth":1}`, now}, ExpectedRowsAffected: &one},
 	}); err != nil {
 		t.Fatal(err)
 	}

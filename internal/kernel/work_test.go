@@ -70,22 +70,22 @@ func TestWorldSpecJournalPurchaseApproval(t *testing.T) {
 	invoke.RequestedActor = &Actor{Type: "automation", ID: "auto-approve"}
 	invoke.Causation.Source = "automation"
 	invoke.Causation.Automation = json.RawMessage(`{"recursion_depth":0}`)
-	executor.AuthorizeCommand = func(context.Context, string, Command) (Actor, error) { return Actor{}, ErrAuthorizationDenied }
-	if _, err := executor.Execute(ctx, "dev", invoke); err == nil || err.(*CommandError).Outcome != "forbidden" {
-		t.Fatalf("route unexpectedly granted mutation authority: %v", err)
-	}
-	executor.AuthorizeCommand = testCommandAuthorizer
-
 	badOutputInvoke := command("cmd_invoke_bad_output", "auto:invoke-bad-output", "function.invoke", "work_stream", &workID, map[string]any{"function_revision_id": mismatchedFunction.Aggregate.ID, "input": map[string]any{"object_id": objectID, "expected_version": 1}})
 	badOutputInvoke.RequestedActor, badOutputInvoke.Causation.Source, badOutputInvoke.Causation.Automation = &Actor{Type: "automation", ID: "auto-approve"}, "automation", json.RawMessage(`{"recursion_depth":0}`)
 	if _, err := executor.Execute(ctx, "dev", badOutputInvoke); err == nil {
 		t.Fatal("kernel Function output outside output_schema was committed")
 	}
-	invokeReceipt := execute(t, executor, "dev", invoke)
+	invokeReceipt, err := executor.Execute(ctx, "dev", invoke)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if invokeReceipt.Aggregate.ID != objectID || invokeReceipt.Aggregate.Version != 2 {
 		t.Fatalf("invoke aggregate=%+v", invokeReceipt.Aggregate)
 	}
-	duplicate := execute(t, executor, "dev", invoke)
+	duplicate, err := executor.Execute(ctx, "dev", invoke)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if duplicate.Outcome != "duplicate" {
 		t.Fatalf("duplicate outcome=%s", duplicate.Outcome)
 	}
@@ -143,7 +143,9 @@ func TestWorldSpecJournalPurchaseApproval(t *testing.T) {
 	invoke2.RequestedActor = &Actor{Type: "automation", ID: "auto-approve"}
 	invoke2.Causation.Source = "automation"
 	invoke2.Causation.Automation = json.RawMessage(`{"recursion_depth":0}`)
-	execute(t, executor, "dev", invoke2)
+	if _, err := executor.Execute(ctx, "dev", invoke2); err != nil {
+		t.Fatal(err)
+	}
 	var successes, satisfied int
 	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM journal_records WHERE stream_id=? AND kind='function.succeeded'`, secondWorkID).Scan(&successes); err != nil {
 		t.Fatal(err)

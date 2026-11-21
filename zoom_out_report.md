@@ -16,7 +16,7 @@
 
 Compos는 IdP 결과 확인 외에도 자동 가입, identity 저장, Person 연결, 세션 발급, membership 및 actor capability 판정을 수행한다. 외부 IdP 사용만으로 인증·인가 외부화가 충족되지 않는다.
 
-근거: [03장](docs/reverse-spec/03-auth-permissions.md#L101), [인증 처리](internal/server/auth.go#L396), [Kernel 권한](internal/kernel/executor.go#L139), [00장](docs/reverse-spec/00-overview.md#L14).
+근거: [03장](docs/reverse-spec/03-principal.md#L101), [인증 처리](internal/server/auth.go#L396), [Kernel 권한](internal/kernel/executor.go#L139), [00장](docs/reverse-spec/00-overview.md#L14).
 
 필요한 결정: 외부로 이전·폐기할 책임과 외부 결과를 집행하기 위해 Compos에 남길 최소 책임을 구분한다. 공급자는 미선택이다.
 
@@ -24,7 +24,7 @@ Compos는 IdP 결과 확인 외에도 자동 가입, identity 저장, Person 연
 
 현재 envelope의 요청 actor나 causation은 외부 신원·인가 판단의 보증이 아니다. 신뢰할 전달자, 주체와 대행 actor, workspace·행위·데이터 범위, 유효기간, 누락·만료·외부 장애 처리, 커밋 시점 유효성, 판단 증거를 정의해야 한다.
 
-근거: [명령 envelope](docs/reverse-spec/00-overview.md#L26), [현재 인증 순서](docs/reverse-spec/03-auth-permissions.md#L53), [현재 권한 계산](docs/reverse-spec/03-auth-permissions.md#L159).
+근거: [명령 envelope](docs/reverse-spec/00-overview.md#L26), [현재 인증 순서](docs/reverse-spec/03-principal.md#L53), [현재 권한 계산](docs/reverse-spec/03-principal.md#L159).
 
 ## 중요 사항
 
@@ -32,7 +32,7 @@ Compos는 IdP 결과 확인 외에도 자동 가입, identity 저장, Person 연
 
 스키마·CAS·관계 수·종료 상태 검증과 외부 인가를 구분해야 한다. 참여자 일치, Function 허용 목록, writable fields, 생성자 전용 lifecycle, actor별 금지 목록은 소유권 분류가 필요하다. 권한 정책을 업무 규칙으로 이름만 바꾸어 유지해서도 안 된다.
 
-근거: [Function 정책](docs/reverse-spec/02-definitions-work.md#L94), [참여자](docs/reverse-spec/02-definitions-work.md#L193), [쓰기 제한](docs/reverse-spec/02-definitions-work.md#L215), [권한 계산](docs/reverse-spec/03-auth-permissions.md#L160).
+근거: [Function 정책](docs/reverse-spec/02-definitions-work.md#L94), [참여자](docs/reverse-spec/02-definitions-work.md#L193), [쓰기 제한](docs/reverse-spec/02-definitions-work.md#L215), [권한 계산](docs/reverse-spec/03-principal.md#L160).
 
 ### M2. 내부 실행도 외부 판단 계약이 필요
 
@@ -50,11 +50,11 @@ Compos는 IdP 결과 확인 외에도 자동 가입, identity 저장, Person 연
 
 기존 receipt 읽기, 미실행 의도 재전송, 이미 외부에서 완료된 결과 기록, 후속 업무 변경을 분리해야 한다. 현재 duplicate receipt는 권한 재검사보다 먼저 반환된다. 철회 시점과 외부 판단 장애·재시도 규칙은 미결정이다. 같은 의도를 새 command로 바꾸어 멱등성을 깨뜨려서는 안 된다.
 
-근거: [duplicate](docs/reverse-spec/00-overview.md#L47), [세션 철회](docs/reverse-spec/03-auth-permissions.md#L188), [callback 실패](docs/reverse-spec/04-automation-integrations.md#L178), [CLI scope](docs/reverse-spec/06-cli-api-search.md#L107).
+근거: [duplicate](docs/reverse-spec/00-overview.md#L47), [세션 철회](docs/reverse-spec/03-principal.md#L188), [callback 실패](docs/reverse-spec/04-automation-integrations.md#L178), [CLI scope](docs/reverse-spec/06-cli-api-search.md#L107).
 
 ### M5. 데이터 이전·보존 경계
 
-identity·session·membership·capability, Person binding/claim, 업무·감사 이력을 구분해야 한다. 현재 import는 이들을 함께 이동하므로 외부화 migration으로 간주할 수 없다. principal 참조를 일괄 삭제하면 과거 이력과 배정을 훼손할 수 있다.
+identity·session·membership·capability, 과거 principal·Person 참조, 업무·감사 이력을 구분해야 한다. 현재 import는 이들을 함께 이동하므로 외부화 migration으로 간주할 수 없다. principal 참조를 일괄 삭제하면 과거 이력과 배정을 훼손할 수 있다.
 
 근거: [테이블 목록](docs/reverse-spec/05-storage-deployment.md#L32), [import](internal/store/logical_import.go#L69).
 

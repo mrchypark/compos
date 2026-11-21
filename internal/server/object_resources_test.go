@@ -1,8 +1,6 @@
 package server
 
 import (
-	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/mrchypark/compos/internal/kernel"
 )
 
 func TestParseRecordScope(t *testing.T) {
@@ -61,7 +57,7 @@ func TestTypedObjectCatalogScopesBeforePagingAndPinsWorkspaceAndType(t *testing.
 	otherType := execute("cmd_scope_other_type", "object_type.define", "object_type", nil, map[string]any{"key": "other_items", "singular": "Other Item", "plural": "Other Items", "field_schema": map[string]any{"type": "object"}})
 	first := execute("cmd_scope_first", "object.create", "object_instance", nil, map[string]any{"object_type_key": "scope_items", "title": "Unselected first"})
 	allowed := execute("cmd_scope_allowed", "object.create", "object_instance", nil, map[string]any{"object_type_key": "scope_items", "title": "Authorized"})
-	token := typedObjectAuthorityFixture(t, handler)
+	token := typedObjectAuthFixture(t, handler)
 	if _, err := db.DB().Exec(`UPDATE object_instances SET updated_at=? WHERE id=?`, "2999-01-01T00:00:00Z", first.Aggregate.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +99,7 @@ func TestTypedObjectCommandsPinIdentityAndRequireVersion(t *testing.T) {
 	db, handler, execute := newWorkflowTestRuntime(t)
 	typeReceipt := execute("cmd_typed_type", "object_type.define", "object_type", nil, map[string]any{"key": "typed_items", "singular": "Typed Item", "plural": "Typed Items", "field_schema": map[string]any{"type": "object"}})
 	otherType := execute("cmd_typed_other_type", "object_type.define", "object_type", nil, map[string]any{"key": "typed_other", "singular": "Typed Other", "plural": "Typed Others", "field_schema": map[string]any{"type": "object"}})
-	token := typedObjectAuthorityFixture(t, handler)
+	token := typedObjectAuthFixture(t, handler)
 	collection := "/api/v1/workspaces/wks_1/object-types/" + typeReceipt.Aggregate.ID + "/objects"
 	duplicateCreate := authRequestRaw(t, handler, http.MethodPost, collection, token, `{"title":"First","TITLE":"Second","idempotency_key":"typed_duplicate_title"}`)
 	if duplicateCreate.Code != http.StatusBadRequest {
@@ -145,21 +141,20 @@ func TestTypedObjectCommandsPinIdentityAndRequireVersion(t *testing.T) {
 		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
 	}
 
-	unauthorizedArchive := authRequest(t, handler, http.MethodDelete, collection+row, token, map[string]any{"idempotency_key": "typed_archive_denied", "expected_version": 2})
-	if unauthorizedArchive.Code != http.StatusForbidden {
-		t.Fatalf("unauthorized archive status=%d body=%s", unauthorizedArchive.Code, unauthorizedArchive.Body.String())
+	archive := authRequest(t, handler, http.MethodDelete, collection+row, token, map[string]any{"idempotency_key": "typed_archive", "expected_version": 2})
+	if archive.Code != http.StatusOK {
+		t.Fatalf("archive status=%d body=%s", archive.Code, archive.Body.String())
 	}
-	var archived sql.NullString
-	if err := db.DB().QueryRow(`SELECT archived_at FROM object_instances WHERE id=?`, objectID).Scan(&archived); err != nil || archived.Valid {
-		t.Fatalf("unauthorized archive changed row: archived=%v err=%v", archived, err)
+	var archived string
+	if err := db.DB().QueryRow(`SELECT archived_at FROM object_instances WHERE id=?`, objectID).Scan(&archived); err != nil || archived == "" {
+		t.Fatalf("archive did not change row: archived=%q err=%v", archived, err)
 	}
 }
 
-func authRequestRaw(t *testing.T, handler http.Handler, method, path, token, body string) *httptest.ResponseRecorder {
+func authRequestRaw(t *testing.T, handler http.Handler, method, path, _ string, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
@@ -168,7 +163,7 @@ func authRequestRaw(t *testing.T, handler http.Handler, method, path, token, bod
 func TestTypedObjectCommandReplays(t *testing.T) {
 	db, handler, execute := newWorkflowTestRuntime(t)
 	typ := execute("cmd_replay_type", "object_type.define", "object_type", nil, map[string]any{"key": "replay_items", "singular": "Item", "plural": "Items", "field_schema": map[string]any{"type": "object"}})
-	token := typedObjectAuthorityFixture(t, handler)
+	token := typedObjectAuthFixture(t, handler)
 	collection := "/api/v1/workspaces/wks_1/object-types/" + typ.Aggregate.ID + "/objects"
 	// Capture durable effects as well as the row: a duplicate must append nothing.
 	snapshot := func() string {
@@ -272,42 +267,11 @@ func TestTypedObjectCommandReplays(t *testing.T) {
 		t.Fatalf("fresh archive of archived row status=%d body=%s", fresh.Code, fresh.Body.String())
 	}
 
-	handler.authority = testAuthority{request: func(*http.Request) (string, error) { return "", errTestAuthorityDenied }}
-	denied := authRequest(t, handler, http.MethodDelete, collection+"/"+objectID, token, map[string]any{"expected_version": 2, "idempotency_key": "replay_archive"})
-	if denied.Code != http.StatusForbidden {
-		t.Fatalf("revoked membership replay status=%d body=%s", denied.Code, denied.Body.String())
+	replay := authRequest(t, handler, http.MethodDelete, collection+"/"+objectID, token, map[string]any{"expected_version": 2, "idempotency_key": "replay_archive"})
+	if replay.Code != http.StatusOK || !strings.Contains(replay.Body.String(), `"outcome":"duplicate"`) {
+		t.Fatalf("archive replay status=%d body=%s", replay.Code, replay.Body.String())
 	}
 	if after := snapshot(); after != before {
-		t.Fatalf("denied replay mutated state: before=%s after=%s", before, after)
-	}
-}
-
-func TestTypedObjectCommandIDsIsolateLedgerScopes(t *testing.T) {
-	db, handler, execute := newWorkflowTestRuntime(t)
-	execute("cmd_scope_replay_type", "object_type.define", "object_type", nil, map[string]any{"key": "id_scopes", "singular": "Item", "plural": "Items", "field_schema": map[string]any{"type": "object"}})
-
-	ids := map[string]bool{}
-	for _, actor := range []string{"dev", "other"} {
-		request := httptest.NewRequest(http.MethodPost, "/", nil)
-		request = request.WithContext(context.WithValue(request.Context(), principalContextKey{}, actor))
-		response := httptest.NewRecorder()
-		handler.executeTypedObjectCommand(response, request, kernel.Command{WorkspaceID: "wks_1", IdempotencyKey: "shared-key", CommandType: "object.create", Target: kernel.Target{AggregateType: "object_instance"}, Preconditions: []kernel.Precondition{}, Payload: json.RawMessage(`{"object_type_key":"id_scopes","title":"Scoped"}`), Causation: kernel.Causation{Source: "api"}})
-		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"outcome":"applied"`) {
-			t.Fatalf("principal=%s status=%d body=%s", actor, response.Code, response.Body.String())
-		}
-		var receipt struct {
-			CommandID string `json:"command_id"`
-		}
-		if err := json.Unmarshal(response.Body.Bytes(), &receipt); err != nil {
-			t.Fatal(err)
-		}
-		if receipt.CommandID == "" || ids[receipt.CommandID] {
-			t.Fatalf("principal command ID collision: %q", receipt.CommandID)
-		}
-		ids[receipt.CommandID] = true
-	}
-	var count int
-	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM object_instances WHERE title='Scoped'`).Scan(&count); err != nil || count != 2 {
-		t.Fatalf("isolated objects=%d err=%v", count, err)
+		t.Fatalf("replay mutated state: before=%s after=%s", before, after)
 	}
 }

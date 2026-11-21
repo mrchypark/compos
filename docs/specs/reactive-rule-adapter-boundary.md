@@ -68,7 +68,7 @@ trigger:
   event_type: object.created
   event_schema_version: 1
   aggregate_type: object_instance
-  allowed_causation_sources: [cli, api, automation, adapter_reducer]
+  allowed_causation_sources: [api, automation, adapter_reducer]
   excluded_automation_ids: [self]
 ```
 

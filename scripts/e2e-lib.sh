@@ -61,7 +61,6 @@ stop_process() {
   fi
 }
 
-build_compos() {
-  (cd "$ROOT_DIR" && go build -o "$COMPOS_BIN" ./cmd/compos)
+build_server() {
   (cd "$ROOT_DIR" && go build -o "$SERVER_BIN" ./cmd/server)
 }

@@ -26,7 +26,7 @@ func TestExportFilesystemReplicaStableAndExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Tables != 1 || result.Rows != 2 || result.ExcludedTables != 11 || result.SHA256 == "" {
+	if result.Tables != 1 || result.Rows != 2 || result.ExcludedTables != 9 || result.SHA256 == "" {
 		t.Fatalf("unexpected summary: %#v", result)
 	}
 	info, err := os.Stat(first)
@@ -57,7 +57,7 @@ func TestExportFilesystemReplicaStableAndExact(t *testing.T) {
 	if got, ok := document.Tables[0].Rows[0][1].(json.Number); !ok || got.String() != "-9007199254740993" {
 		t.Fatalf("exact integer lost: %#v", document.Tables[0].Rows[0][1])
 	}
-	if len(document.Excluded) != 11 {
+	if len(document.Excluded) != 9 {
 		t.Fatalf("unexpected excluded tables: %#v", document.Excluded)
 	}
 	for _, excluded := range document.Excluded {
@@ -159,7 +159,7 @@ func seedSource(t *testing.T, storeDir string, blob bool) {
 		exec("retired-"+table, "CREATE TABLE "+table+" (id INTEGER PRIMARY KEY, body TEXT)")
 		exec("retired-row-"+table, "INSERT INTO "+table+" VALUES (?, ?)", int64(1), "retired Knowledge")
 	}
-	for _, table := range []string{"workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities", "principal_person_bindings", "person_binding_claims"} {
+	for _, table := range []string{"workspace_memberships", "auth_provider_identities", "auth_sessions", "actor_capabilities"} {
 		exec("retired-"+table, "CREATE TABLE "+table+" (id INTEGER PRIMARY KEY, body TEXT)")
 		exec("retired-row-"+table, "INSERT INTO "+table+" VALUES (?, ?)", int64(1), "retired-private-identity")
 	}

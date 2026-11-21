@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remote runner only: health is public; unconfigured authority must fail closed.
+# Remote runner only: verify health and credential-free workspace provisioning.
 set -eu
 image=${1:?server image required}
 results=${2:?results directory required}
@@ -28,11 +28,13 @@ until curl --max-time 2 -fsS "$base/api/v1/health" > "$results/health.json"; do
   [ "$attempt" -lt 60 ] || exit 1
   sleep 1
 done
-status=$(curl --max-time 5 -sS -o "$results/authority.json" -w '%{http_code}' \
-  -H 'Authorization: Bearer forged' -H 'X-Principal-ID: admin' \
-  -H 'Content-Type: application/json' -d '{"key":"smoke","name":"Smoke"}' \
+status=$(curl --max-time 5 -sS -o "$results/workspace.json" -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d '{"key":"smoke","name":"Smoke","idempotency_key":"smoke-workspace"}' \
   "$base/api/v1/workspaces")
-[ "$status" = 503 ]
-jq -e '.. | objects | select(.code? == "external_authority_unavailable")' "$results/authority.json" >/dev/null
-printf '%s\n' 'health=passed' 'authority_fail_closed=passed' \
-  'public_crud=not_tested' 'provider_authority_integration=not_tested' > "$results/smoke.env"
+[ "$status" = 201 ]
+workspace=$(jq -er '.data.id' "$results/workspace.json")
+jq -e '.data | (has("creator_person_object_instance_id") | not) and (has("works_for_object_relation_id") | not)' "$results/workspace.json" >/dev/null
+curl --max-time 5 -fsS "$base/api/v1/workspaces/$workspace/objects?object_type=people" > "$results/people.json"
+jq -e '.data == []' "$results/people.json" >/dev/null
+printf '%s\n' 'health=passed' 'workspace_create=passed' 'no_creator_person=passed' > "$results/smoke.env"

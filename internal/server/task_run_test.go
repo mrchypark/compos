@@ -40,29 +40,32 @@ func TestTaskRunProjectionAndSubmissionCompletion(t *testing.T) {
 	})
 	work := execute("cmd_taskrun_open", "work.open", "work_stream", nil, map[string]any{"task_revision_id": task.Aggregate.ID, "context": map[string]any{"question": "Why?"}})
 	workID := work.Aggregate.ID
-	execute("cmd_taskrun_route", "work.route", "work_stream", &workID, map[string]any{"participant": map[string]any{"kind": "human", "id": "dev"}, "reason": "review"})
+	execute("cmd_taskrun_route", "work.route", "work_stream", &workID, map[string]any{"participant": map[string]any{"kind": "human", "id": "local"}, "reason": "review"})
 	execute("cmd_taskrun_handoff", "work.route", "work_stream", &workID, map[string]any{"participant": map[string]any{"kind": "human", "id": "reviewer"}, "reason": "specialist review"})
 	inbox := request(t, handler, http.MethodGet, "/api/v1/workspaces/wks_1/work", nil)
-	if inbox.Code != http.StatusOK || strings.Contains(inbox.Body.String(), `"id":"`+workID+`"`) {
-		t.Fatalf("work routed to another human remained in inbox: status=%d body=%s", inbox.Code, inbox.Body.String())
+	if inbox.Code != http.StatusOK || !strings.Contains(inbox.Body.String(), `"id":"`+workID+`"`) || !strings.Contains(inbox.Body.String(), `"assignee":{"id":"reviewer","kind":"human"}`) || strings.Contains(inbox.Body.String(), `"assignee":{"id":"local","kind":"human"}`) {
+		t.Fatalf("named human assignment missing or stale: status=%d body=%s", inbox.Code, inbox.Body.String())
 	}
-	execute("cmd_taskrun_return", "work.route", "work_stream", &workID, map[string]any{"participant": map[string]any{"kind": "human", "id": "dev"}, "reason": "return"})
+	execute("cmd_taskrun_return", "work.route", "work_stream", &workID, map[string]any{"participant": map[string]any{"kind": "human", "id": "local"}, "reason": "return"})
 	inbox = request(t, handler, http.MethodGet, "/api/v1/workspaces/wks_1/work", nil)
 	if inbox.Code != http.StatusOK || !strings.Contains(inbox.Body.String(), `"id":"`+workID+`"`) {
 		t.Fatalf("human inbox status=%d body=%s", inbox.Code, inbox.Body.String())
 	}
-	execute("cmd_taskrun_invoke", "function.invoke", "work_stream", &workID, map[string]any{"function_revision_id": function.Aggregate.ID, "input": map[string]any{"question": "Why?"}})
+	invokePayload, _ := json.Marshal(map[string]any{"function_revision_id": function.Aggregate.ID, "input": map[string]any{"question": "Why?"}})
+	if _, err := handler.kernel.Execute(context.Background(), "local", kernel.Command{CommandID: "cmd_taskrun_invoke", IdempotencyKey: "idem_cmd_taskrun_invoke", WorkspaceID: "wks_1", RequestedActor: &kernel.Actor{Type: "user", ID: "local"}, CommandType: "function.invoke", Target: kernel.Target{AggregateType: "work_stream", AggregateID: &workID}, Preconditions: []kernel.Precondition{}, Payload: invokePayload, Causation: kernel.Causation{Source: "api"}}); err != nil {
+		t.Fatal(err)
+	}
 	inbox = request(t, handler, http.MethodGet, "/api/v1/workspaces/wks_1/work", nil)
 	detail := request(t, handler, http.MethodGet, "/api/v1/workspaces/wks_1/work/"+workID, nil)
 	if !strings.Contains(inbox.Body.String(), `"status":"running"`) || !strings.Contains(detail.Body.String(), `"status":"running"`) {
 		t.Fatalf("running status diverged: inbox=%s detail=%s", inbox.Body.String(), detail.Body.String())
 	}
 	invalidSubmission, _ := json.Marshal(map[string]any{"submission": map[string]any{"answer": 7}})
-	if _, err := handler.kernel.Execute(context.Background(), "dev", kernel.Command{CommandID: "cmd_taskrun_bad_submit", IdempotencyKey: "idem_taskrun_bad_submit", WorkspaceID: "wks_1", CommandType: "work.submit", Target: kernel.Target{AggregateType: "work_stream", AggregateID: &workID}, Preconditions: []kernel.Precondition{}, Payload: invalidSubmission, Causation: kernel.Causation{Source: "api"}}); err == nil {
+	if _, err := handler.kernel.Execute(context.Background(), "local", kernel.Command{CommandID: "cmd_taskrun_bad_submit", IdempotencyKey: "idem_taskrun_bad_submit", WorkspaceID: "wks_1", RequestedActor: &kernel.Actor{Type: "human", ID: "local"}, CommandType: "work.submit", Target: kernel.Target{AggregateType: "work_stream", AggregateID: &workID}, Preconditions: []kernel.Precondition{}, Payload: invalidSubmission, Causation: kernel.Causation{Source: "api"}}); err == nil {
 		t.Fatal("submission outside the Task output contract was accepted")
 	}
 	submit := kernel.Command{
-		CommandID: "cmd_taskrun_submit", IdempotencyKey: "idem_taskrun_submit", WorkspaceID: "wks_1", CommandType: "work.submit",
+		CommandID: "cmd_taskrun_submit", IdempotencyKey: "idem_taskrun_submit", WorkspaceID: "wks_1", RequestedActor: &kernel.Actor{Type: "human", ID: "local"}, CommandType: "work.submit",
 		Target: kernel.Target{AggregateType: "work_stream", AggregateID: &workID}, Preconditions: []kernel.Precondition{},
 		Payload: json.RawMessage(`{"submission":{"answer":"Because."}}`), Causation: kernel.Causation{Source: "api"},
 	}

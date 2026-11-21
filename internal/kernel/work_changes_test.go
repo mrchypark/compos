@@ -46,12 +46,6 @@ func TestRhizaWorkSubmitChangesIsOneAtomicSubmission(t *testing.T) {
 	if err := s.ReadRow(ctx, store.ReadLinearizable, `SELECT value_number FROM object_field_index WHERE workspace_id='wks_1' AND object_instance_id=? AND field_name='amount'`, root.Aggregate.ID).Scan(&unchanged); err != nil || unchanged != 1 {
 		t.Fatalf("failed submission changed root amount=%v err=%v", unchanged, err)
 	}
-	unauthorized := command("change-unauthorized", "change-unauthorized", "work.submit", "work_stream", &workID, map[string]any{"submission": map[string]any{}, "changes": []any{
-		map[string]any{"binding_id": "quote", "command_type": "object.update", "target": map[string]any{"aggregate_type": "object_instance", "aggregate_id": root.Aggregate.ID}, "preconditions": []any{map[string]any{"aggregate_type": "object_instance", "aggregate_id": root.Aggregate.ID, "expected_version": 1}}, "payload": map[string]any{"values": map[string]any{"amount": 2}}},
-	}})
-	if _, err := e.Execute(ctx, "outsider", unauthorized); err == nil {
-		t.Fatal("non-member submitted Work changes")
-	}
 	stale := command("change-stale", "change-stale", "work.submit", "work_stream", &workID, map[string]any{"submission": map[string]any{}, "changes": []any{
 		map[string]any{"binding_id": "quote", "command_type": "object.update", "target": map[string]any{"aggregate_type": "object_instance", "aggregate_id": root.Aggregate.ID}, "preconditions": []any{map[string]any{"aggregate_type": "object_instance", "aggregate_id": root.Aggregate.ID, "expected_version": 99}}, "payload": map[string]any{"values": map[string]any{"amount": 2}}},
 	}})

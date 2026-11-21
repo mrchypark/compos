@@ -85,7 +85,7 @@ PB legacy principal migration remains a separate, explicit issuer+subject to
 legacy-ID mapping owned by Compos. There is no email/password auto-linking and no
 implemented migration command in this slice. Existing membership/Kernel actor
 capability checks remain authoritative. SearchSyncer and internal callback auth
-are separate service contracts; the existing configured operator bearer remains
+are separate service contracts; the existing configured control-plane bearer remains
 limited to the actor-capabilities control plane, not ordinary user APIs.
 
 ## Logout, revocation and unsupported features
