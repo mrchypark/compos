@@ -68,4 +68,53 @@ SOFTWARE.
 
 The Linux amd64 server dependency graph (CGO enabled) and search-syncer dependency graph (CGO disabled) were obtained with `go list -deps` from the root module using Go 1.27.4. The versioned module list, cached license, copyright, patent and NOTICE files, and Go license and patent text are reproduced in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt). Some included nested texts may apply only to unused upstream files. The dependency graph may differ on other architectures or with other build settings; update and review the notices for each release.
 
-Known limits: `github.com/ncruces/go-sqlite3-wasm/v3` v3.2.35304 says its SQLite and supporting-library translations retain their original licenses, but the cached module does not identify all supporting libraries or provide all of their original license texts; its MIT-0 license cannot be assumed to cover those translations. The SQLite amalgamation and its original notices are not present in that cached module. This is not a complete audit of source-file copyright notices, embedded assets or generated code, Go standard-library vendored code, native libraries, or container base images and OS packages. In particular, review Debian `libsqlite3-0` and the other installed packages in the actual server image. The exporter is outside this inventory. Check the actual release images, dependency versions, and upstream source for additional obligations. The Compos project license is specified in LICENSE.
+### SQLite translation and supporting code
+
+The server imports the core and FTS5 packages from `github.com/ncruces/go-sqlite3-wasm/v3` v3.2.35304. Its [build scripts](https://github.com/ncruces/go-sqlite3-wasm/tree/v3.2.35304/build) identify SQLite 3.53.4, its extensions, and generated C library and allocator code as inputs; the [FTS5 build](https://github.com/ncruces/go-sqlite3-wasm/tree/v3.2.35304/fts5/build) uses the same SQLite release. SQLite states that its deliverable code is [dedicated to the public domain](https://www.sqlite.org/copyright.html). The translation's [README](https://github.com/ncruces/go-sqlite3-wasm/blob/v3.2.35304/README.md) states that the original licenses remain in effect for translated code.
+
+The translation module selects `github.com/ncruces/wasm2go` v0.4.11 as its generator. Its `libc-gen` supplies the C and Go support code used by the build, including [Doug Lea's malloc](https://github.com/ncruces/wasm2go/blob/v0.4.11/libc-gen/c/malloc.c), which is included by the core build through `malloc_sbrk.c`. The following texts are reproduced from that version's [license](https://github.com/ncruces/wasm2go/blob/v0.4.11/LICENSE) and allocator source.
+
+#### wasm2go v0.4.11
+
+MIT License
+
+Copyright (c) 2026 Nuno Cruces
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+#### Doug Lea's malloc 2.8.6
+
+Copyright 2023 Doug Lea
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Known limits: The supporting-code inventory above is not a complete audit of source-file copyright notices, embedded assets or generated code, Go standard-library vendored code, native libraries, or container base images and OS packages. In particular, review Debian `libsqlite3-0` and the other installed packages in the actual server image. The exporter is outside this inventory. Check the actual release images, dependency versions, and upstream source for additional obligations. The Compos project license is specified in LICENSE.
