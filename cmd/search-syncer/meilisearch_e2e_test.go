@@ -20,7 +20,7 @@ import (
 )
 
 // TestMeilisearchE2EProjectionSync exercises the deployed Meilisearch engine.
-// It is intentionally opt-in: the supplied key must be restricted to compos-tg900-e2e-*.
+// It is intentionally opt-in: the supplied key must be restricted to compos-e2e-*.
 func TestMeilisearchE2EProjectionSync(t *testing.T) {
 	meiliURL, meiliKey := os.Getenv("COMPOS_E2E_MEILISEARCH_URL"), os.Getenv("COMPOS_E2E_MEILISEARCH_KEY")
 	if meiliURL == "" || meiliKey == "" {
@@ -37,7 +37,7 @@ func TestMeilisearchE2EProjectionSync(t *testing.T) {
 	compos := httptest.NewServer(handler)
 	defer compos.Close()
 
-	index := "compos-tg900-e2e-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	index := "compos-e2e-" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	cfg := Config{ComposEndpoint: compos.URL, MeilisearchURL: meiliURL, MeilisearchKey: meiliKey, IndexUID: index, PrimaryKey: "id", BatchSize: 100}
 	meili := newMeilisearchClient(cfg)
 	defer func() {

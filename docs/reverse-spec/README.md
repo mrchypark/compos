@@ -14,7 +14,6 @@ Compos의 HTTP 동작에는 authentication mode가 없다. 기본이자 유일�
 | [00 실행 구조](00-overview.md) | runtime, Kernel envelope, idempotency, ledger/effect; cmd/server, internal/kernel, internal/store | 소스 대조·범위 내 교차 검토 완료, 지적 사항 반영 |
 | [01 객체·관계](01-objects-relations.md) | dynamic types, schema revisions, fields, states, generated values, relations | 소스 기반 초안 작성, 장 간 인터페이스 peer review 수행 |
 | [02 정의·Work](02-definitions-work.md) | spec kinds, Task/Work, submit changes, Function/Agent/Workflow, Journal, Event | 교차 검토 완료. callback result의 failed/cancelled null 허용 수정이 본문에 반영된 것을 확인 |
-| [03 principal](03-principal.md) | 무인증 HTTP, 고정 `local` attribution, standalone/HA | 소스와 로컬 실행 대조 |
 | [04 자동화·연동](04-automation-integrations.md) | ReactiveRule, expression, scheduler, adapter, Conductor outbox/callback | 교차 검토 완료. 실패 정책 route의 human-only 제약 반영 |
 | [05 저장](05-storage-deployment.md) | SQLite/Rhiza, v7 identity·구형 DB 거부, 22개 테이블, 업무 import/export | 새 DDL 22개 정적 대조. 라이브 검증 없음 |
 | [06 API·검색](06-api-search.md) | HTTP route/registry inventory, typed pagination, search-syncer와 검색 속성 | 소스 대조 |
@@ -25,7 +24,7 @@ Compos의 HTTP 동작에는 authentication mode가 없다. 기본이자 유일�
 
 | 여정 | 시작 → 결과 | 주 담당 장·소스 |
 |---|---|---|
-| workspace 준비 | HTTP 요청의 고정 `local` attribution → creator Person 연결 없이 workspace 업무 provision | 05 / [principal](../../internal/server/server.go#L1038), [provision](../../internal/server/server.go#L122) |
+| workspace 준비 | HTTP 요청의 고정 `local` attribution → 빈 도메인 모델로 workspace 생성 | 05 / [principal](../../internal/server/server.go#L1038), [provision](../../internal/server/server.go#L122) |
 | 동적 업무 데이터 구성 | 객체형 정의 → 객체 생성 → 값 교체/상태 이동 → 관계 link/unlink | 01, 06 / [registry](../../internal/kernel/registry.go#L40), [command surface](../../internal/server/server.go#L391) |
 | 업무 규칙 발행·실행 | Task 등 spec 발행 → pinned Work open → route → submit/invoke → 완료/취소 | 02, 04 / [Work](../../internal/kernel/work.go#L918) |
 | 일괄 업무 변경 | work.submit.changes와 client refs → 원자적 변경·생성 ID 반환 | 02, 05 / [work changes](../../internal/kernel/work_changes.go#L1) |
@@ -45,6 +44,6 @@ Compos의 HTTP 동작에는 authentication mode가 없다. 기본이자 유일�
 
 ## 검토 기록과 남은 일
 
-인증 없는 기본 동작으로의 전환을 반영해 00·01·02·04·05·06장의 라우트·DDL 목록을 다시 대조했다. 현재 테이블은 22개다. HTTP 요청은 credential 없이 route로 전달되고 항상 `local`을 attribution과 idempotency에 사용한다. workspace 생성은 creator Person 객체나 회사 관계를 만들지 않는다. 멤버십·capability·Grant 판정은 없다. 과거 zoom_out 보고서는 작성 당시의 이력으로 보존하며 현재 통합 완료나 테스트 통과의 근거가 아니다.
+현재 테이블은 22개다. HTTP 요청은 credential 없이 route로 전달되고 항상 `local`을 attribution과 idempotency에 사용한다. 새 workspace의 도메인 모델은 비어 있다. 멤버십·capability 판정은 없다.
 
 6개 장이 작성되었다는 사실만으로 실제 IdP·Conductor·검색 엔진·다중 노드 저장소의 운영 동작을 입증하지 않는다. 이번 문서 작성에서는 테스트·빌드·서버·배포를 실행하지 않았다. 알려진 구현 한계는 해당 장에 기록하고, 미확인 사항은 가정으로 채우지 않는다. 새 아키텍처 결정은 추가하지 않았다.

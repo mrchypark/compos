@@ -15,11 +15,11 @@ API clients submit command intents to the Compos server. The server command
 endpoint does not publish a second command log; no S2 audit synchronization
 command remains.
 
-Every mutation requires:
+Command envelopes include:
 
-- authenticated principal derived from credentials
-- requested effective actor
+- a requested actor, when supplied
 - workspace id
+- command id
 - command type
 - idempotency key
 - target
@@ -27,6 +27,9 @@ Every mutation requires:
 - command-specific payload
 
 The Kernel validates every mutation before committing.
+The HTTP server uses the fixed principal `local`; it does not authenticate
+callers or enforce permissions, capability grants, or workspace membership.
+Principal and actor fields are command and audit context, not proof of identity.
 
 ## Forbidden Mutating Routes
 
@@ -67,13 +70,13 @@ Ontology revisions remain available through generic spec publication and reads.
 ## Import API
 
 Imports are Kernel commands or read-only snapshots. Imports must not bypass
-schema validation, authorization, state machines, relation constraints, command
+schema validation, state machines, relation constraints, command
 ledger, activity, outbox, or projection events.
 
 ## Adapter Ingress API
 
 Adapter callbacks may enter through append-only inbound event APIs. These routes
-require bearer authentication and workspace membership, record external evidence
-only, and must not change canonical business aggregate rows directly. Reducers
-turn inbound events into observations or Kernel command
-intents through the normal command path.
+do not authenticate callers or check workspace membership. They record external
+evidence only and must not change canonical business aggregate rows directly.
+Reducers turn inbound events into observations or Kernel command intents through
+the normal command path.

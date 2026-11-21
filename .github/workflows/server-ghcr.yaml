@@ -76,7 +76,7 @@ jobs:
         run: |
           mkdir -p release-results
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          image="ghcr.io/mrchypark/compos:sha-$GITHUB_SHA"
+          image="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]'):sha-$GITHUB_SHA"
           echo "SERVER_IMAGE=$image" >> "$GITHUB_ENV"
           printf '%s\n' "$GITHUB_SHA" > release-results/source-sha.txt
       - uses: docker/setup-buildx-action@v4.2.0

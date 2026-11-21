@@ -94,8 +94,7 @@ collection group. All three values are explicit. The registry and command
 surface must not accept a separate `slug`, infer either name, accept an alias,
 or fall back to a singular key. No
 pre-existing user-defined object types are migrated. New definitions use plural
-keys such as `contracts`; built-ins use `people` and
-`companies`.
+keys such as `contracts`.
 
 These names are not canonical aggregate IDs. Registry metadata and command
 surfaces continue to expose stable `object_type_id` values, and persisted

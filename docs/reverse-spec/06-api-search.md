@@ -11,7 +11,7 @@
 |---|---|
 | GET `/api/v1/health` | storage kind, cluster, readiness |
 | GET `/api/v1/search-syncer/workspace` | search-syncer가 사용할 workspace |
-| POST `/api/v1/workspaces` | workspace와 built-in business objects 생성 |
+| POST `/api/v1/workspaces` | 빈 도메인 모델을 가진 workspace 생성 |
 | GET `/api/v1/kernel/command-registry` | 공개 command 정의 |
 | POST `/api/v1/kernel/commands` | Kernel command 제출 |
 | GET `W/command-surface` | 현재 객체형·관계·명령 표면 |

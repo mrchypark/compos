@@ -7,12 +7,10 @@ on:
       - "go.sum"
       - "cmd/**"
       - "internal/**"
-      - "tools/rhiza-v012-export/**"
       - "scripts/**"
       - "deploy/**"
       - "docs/**"
       - "Dockerfile"
-      - ".github/workflows/build-images.yaml"
       - ".github/workflows/server-ghcr.yaml"
       - ".github/workflows/test.yaml"
   pull_request:
@@ -24,26 +22,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
-
-      - name: Write image path gate
-        if: github.event_name == 'push'
-        shell: sh
-        run: |
-          {
-            echo "before=${{ github.event.before }}"
-            echo "after=${{ github.event.after }}"
-            echo "base=${{ github.event.before }}"
-            echo "head=${{ github.event.after || github.sha }}"
-          } > image-path-gate.env
-
-      - name: Upload image path gate
-        if: github.event_name == 'push'
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: image-path-gate
-          path: image-path-gate.env
-          if-no-files-found: error
-          retention-days: 1
 
       - name: Shell syntax
         run: find scripts -name '*.sh' -exec sh -c 'for script do echo "$script"; sh -n "$script" || exit 1; done' sh {} +
@@ -78,10 +56,6 @@ jobs:
 
       - name: Go vet
         run: go vet ./...
-
-      - name: Legacy logical export
-        working-directory: tools/rhiza-v012-export
-        run: go test ./... && go vet ./...
 
   rhiza-cluster:
     runs-on: ubuntu-24.04

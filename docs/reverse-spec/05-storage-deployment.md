@@ -44,12 +44,10 @@ Command ledger의 멱등 범위는 `(workspace_id, principal_id, idempotency_key
 
 검색 snapshot은 서버가 sequence와 객체를 여러 `ReadLocal` 호출로 읽으므로 한 시점의 원자적 전체 집합을 보장하지 않는다. [projection snapshot](../../internal/server/server.go#L855)
 
-## Backup·export
+## Backup
 
 - SQLite `Backup`은 driver online backup을 사용한다. `-backup <path>` 후 서버는 HTTP를 시작하지 않는다. Rhiza 직접 SQLite backup은 지원하지 않는다.
-- `tools/rhiza-v012-export`는 legacy v0.12/v2 데이터를 `compos-logical-v1` JSON으로 내보낸다. 현행 v7의 범용 round trip이 아니다.
-
-[Backup](../../internal/store/store.go#L258), [exporter](../../tools/rhiza-v012-export/main.go#L92)
+[Backup](../../internal/store/store.go#L258)
 
 ## Object store와 peer 설정
 
@@ -59,7 +57,7 @@ Rhiza는 `COMPOS_RHIZA_OBJECT_*` env로 GCS/filesystem 및 S3 호환 object stor
 
 Dockerfile은 `server`, `search-syncer` build target만 제공한다. server는 Go 1.27.4 빌더와 Debian runtime을 사용한다. [Dockerfile](../../Dockerfile#L1)
 
-`test compos`는 shell syntax·ShellCheck, Go test·vet, legacy exporter test/vet, Rhiza 3-node script를 수행한다. Helm/Rust/CRD 단계는 제거되었다. 이미지 build matrix는 server와 search-syncer만 포함한다. [test workflow](../../.github/workflows/test.yaml#L1), [image workflow](../../.github/workflows/build-images.yaml#L1)
+`test compos`는 shell syntax·ShellCheck, Go test·vet, Rhiza 3-node script를 수행한다. server 이미지 검증과 선택적 게시는 별도 workflow가 담당한다. [test workflow](../../.github/workflows/test.yaml#L1), [server image workflow](../../.github/workflows/server-ghcr.yaml#L1)
 
 ## 검증 상태
 

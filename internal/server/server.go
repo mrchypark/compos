@@ -173,15 +173,10 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 				}
 				return err
 			}
-			if err = provisionBuiltins(r.Context(), tx, id, body.Name, principal, now); err != nil {
-				return err
-			}
 			response = map[string]any{"data": map[string]any{
 				"id": id, "workspace_id": id, "key": body.Key, "name": body.Name, "version": 1,
-				"creator_principal_id":                 principal,
-				"workspace_company_object_instance_id": "obj_company_" + id,
-				"works_for_relation_definition_id":     "rdf_builtin_works_for_" + id,
-				"created_at":                           now, "created": true, "status": "created",
+				"creator_principal_id": principal,
+				"created_at":           now, "created": true, "status": "created",
 			}}
 			resultJSON, _ := json.Marshal(response)
 			_, err = tx.Exec(`INSERT INTO workspace_creation_requests VALUES(?,?,?,?,?,?,?)`, principal, body.IdempotencyKey, hash, string(payload), string(resultJSON), id, now)
@@ -241,10 +236,8 @@ func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key,
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	response := map[string]any{"data": map[string]any{
 		"id": id, "workspace_id": id, "key": key, "name": name, "version": 1,
-		"creator_principal_id":                 principal,
-		"workspace_company_object_instance_id": "obj_company_" + id,
-		"works_for_relation_definition_id":     "rdf_builtin_works_for_" + id,
-		"created_at":                           now, "created": true, "status": "created",
+		"creator_principal_id": principal,
+		"created_at":           now, "created": true, "status": "created",
 	}}
 	resultJSON, _ := json.Marshal(response)
 	zero, one := int64(0), int64(1)
@@ -253,11 +246,6 @@ func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key,
 		{SQL: `SELECT id FROM workspaces WHERE key=?`, Args: []any{key}, WantRows: true, ExpectedReturnedRows: &zero},
 		{SQL: `INSERT INTO workspaces(id,key,name,version,created_at,updated_at) VALUES(?,?,?,1,?,?)`, Args: []any{id, key, name, now, now}, ExpectedRowsAffected: &one},
 	}
-	builtins, err := provisionBuiltinStatements(ctx, id, name, principal, now)
-	if err != nil {
-		return nil, false, err
-	}
-	statements = append(statements, builtins...)
 	statements = append(statements, rhiza.SQLStatement{SQL: `INSERT INTO workspace_creation_requests(principal_id,idempotency_key,request_hash,request_payload_json,result_json,workspace_id,created_at) VALUES(?,?,?,?,?,?,?)`, Args: []any{principal, idempotencyKey, requestHash, requestJSON, string(resultJSON), id, now}, ExpectedRowsAffected: &one})
 	applyErr := s.store.ApplyStatements(ctx, "workspace:"+uuid.NewString(), statements)
 	if applyErr == nil {
@@ -273,67 +261,6 @@ func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key,
 		return nil, false, errors.New("workspace key conflict")
 	}
 	return nil, false, applyErr
-}
-
-type contextExecer interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-type statementCollector struct {
-	one        int64
-	statements []rhiza.SQLStatement
-}
-
-func (c *statementCollector) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
-	c.statements = append(c.statements, rhiza.SQLStatement{SQL: query, Args: args, ExpectedRowsAffected: &c.one})
-	return affectedRows(1), nil
-}
-
-type affectedRows int64
-
-func (r affectedRows) LastInsertId() (int64, error) { return 0, nil }
-func (r affectedRows) RowsAffected() (int64, error) { return int64(r), nil }
-
-func provisionBuiltinStatements(ctx context.Context, workspace, workspaceName, principal, ts string) ([]rhiza.SQLStatement, error) {
-	collector := &statementCollector{one: 1}
-	err := provisionBuiltins(ctx, collector, workspace, workspaceName, principal, ts)
-	return collector.statements, err
-}
-
-func provisionBuiltins(ctx context.Context, tx contextExecer, workspace, workspaceName, principal, ts string) error {
-	peopleID := "otp_builtin_person_" + workspace
-	companiesID := "otp_builtin_company_" + workspace
-	relationID := "rdf_builtin_works_for_" + workspace
-	companyID := "obj_company_" + workspace
-	peopleSchema := canonical(map[string]any{"type": "object", "additionalProperties": true, "properties": map[string]any{"display_name": map[string]any{"type": "string"}, "email": map[string]any{"type": "string", "format": "email"}, "phone": map[string]any{"type": "string"}}})
-	companySchema := canonical(map[string]any{"type": "object", "additionalProperties": true, "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []string{"name"}})
-	link := map[string]any{"id": relationID, "key": "works_for", "from_object_type_id": peopleID, "to_object_type_id": companiesID, "cardinality": "many_to_one", "required": false}
-	relationSchema := canonical(map[string]any{"links": []any{link}})
-	for _, item := range []struct{ id, key, singular, plural, schema string }{{peopleID, "people", "person", "people", peopleSchema}, {companiesID, "companies", "company", "companies", companySchema}} {
-		digest := schemaRevisionDigest(1, item.schema, relationSchema, "")
-		if _, err := tx.ExecContext(ctx, `INSERT INTO object_types(id,workspace_id,key,singular,plural,schema_version,field_schema_json,relation_schema_json,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,1,?,?,1,?,?,?,?)`, item.id, workspace, item.key, item.singular, item.plural, item.schema, relationSchema, ts, ts, "system", "system"); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO object_type_schema_revisions(workspace_id,object_type_id,schema_version,field_schema_json,relation_schema_json,digest,created_at,created_by_principal_id) VALUES(?,?,1,?,?,?,?,?)`, workspace, item.id, item.schema, relationSchema, digest, ts, "system"); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO relation_definitions(id,workspace_id,key,from_object_type_id,to_object_type_id,cardinality,required,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,'many_to_one',0,1,?,?,?,?)`, relationID, workspace, "works_for", peopleID, companiesID, ts, ts, "system", "system"); err != nil {
-		return err
-	}
-	companyValues := canonical(map[string]any{"name": workspaceName})
-	if _, err := tx.ExecContext(ctx, `INSERT INTO object_instances(id,workspace_id,object_type_id,object_type_schema_version,title,payload_json,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,?,1,?,?,?,?)`, companyID, workspace, companiesID, 1, workspaceName, companyValues, ts, ts, principal, principal); err != nil {
-		return err
-	}
-	for _, row := range []struct {
-		typeID, objectID, field, kind string
-		value                         any
-	}{{companiesID, companyID, "name", "string", workspaceName}} {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO object_field_index(workspace_id,object_type_id,object_instance_id,field_name,value_kind,value_text) VALUES(?,?,?,?,?,?)`, workspace, row.typeID, row.objectID, row.field, row.kind, row.value); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func schemaRevisionDigest(version int64, field, relation, state string) string {

@@ -132,7 +132,7 @@ first-class mapping으로 본다.
 
 EntityDefinition은 다음 두 종류를 가진다.
 
-- Domain Entity: Customer, Contract, Person, Project처럼 Ontology grounding이
+- Domain Entity: Project, Document, Person처럼 Ontology grounding이
   권장되는 업무 세계의 대상
 - System Entity: WebhookDelivery, ImportBatch, ExecutionLock처럼 grounding이
   필수가 아닌 플랫폼 운영 대상
@@ -207,7 +207,7 @@ Principal / Actor
     = 인증, 권한과 Kernel 실행의 보안 주체
 ```
 
-예를 들어 `automation:invoice-reconciliation@3`가 Participant여도 실제
+예를 들어 `automation:record-review@3`가 Participant여도 실제
 Kernel command의 effective actor는 별도 ServicePrincipal일 수 있다.
 requested actor와 effective actor는 감사 기록에서 모두 보존한다.
 
@@ -228,8 +228,7 @@ FunctionDefinition
 별도 ActionType abstraction을 만들지 않는다. 업무 의미가 있는 Action은 Domain
 FunctionDefinition으로 표현한다.
 
-- Domain Function: `purchase_request.approve`, `customer.merge`,
-  `contract.renew`
+- Domain Function: `record.approve`, `document.publish`, `project.archive`
 - System Function: `records.update`, `object.move`, `http.request`,
   `email.send`
 
@@ -248,7 +247,7 @@ Binding
         └─ workflow
 ```
 
-예를 들어 `purchase_request.approve`는 runtime-defined 의미 계약으로 유지하고,
+예를 들어 `record.approve`는 runtime-defined 의미 계약으로 유지하고,
 그 binding만 `object.move`, Workflow 또는 native implementation으로 교체할 수
 있다. interpreted implementation을 native code로 최적화해도 Function identity와
 revision contract는 바뀌지 않는다.
@@ -388,7 +387,7 @@ Kernel Event와 Domain Event를 구분한다.
 
 - Kernel Event: `object.created`, `object.updated`, `object.state_changed`처럼
   committed mutation을 정확히 기술하는 infrastructure event
-- Domain Event spec: `PurchaseRequestApproved`, `CustomerEnriched`처럼 구체적인
+- Domain Event spec: `RecordApproved`, `DocumentPublished`처럼 구체적인
   consumer가 요구할 때만 추가하는 runtime-defined semantic event contract
 - Event Instance: 특정 EventRevision에 pin된 실제 발생
 
@@ -481,27 +480,27 @@ EntityDefinition
 
 ```text
 Ontology
-    PurchaseRequest / Employee
+    Record / Reviewer
 
         ↓ grounding
 
 Operational World
-    EntityDefinition: purchase_requests
-    EntityInstance: PR #123, state=review
+    EntityDefinition: records
+    EntityInstance: Record #123, state=review
 
         ↓ intent
 
-Task spec: approve_purchase_request@3
+Task spec: approve_record@3
 Journal stream: W900
-work.opened → work.routed(human:finance-manager)
+work.opened → work.routed(human:reviewer)
 
         ↓ capability
 
-FunctionDefinition: purchase_request.approve@2
+FunctionDefinition: record.approve@2
 
         ↓ execution
 
-work.submitted(manager-review=approved)
+work.submitted(review=approved)
 function.requested #922
 
         ↓ binding
@@ -516,7 +515,7 @@ entity mutation + command ledger + activity + projection + outbox
 
 Kernel Event: object.state_changed
 function.succeeded #922
-work.satisfied(task=approve_purchase_request@3, proof=transaction)
+work.satisfied(task=approve_record@3, proof=transaction)
 
         ↓
 

@@ -56,7 +56,7 @@ performs final Work completion. Function nodes remain open until
 `function.succeeded` or `function.failed`. Publishing a Function or Workflow
 rejects any reachable composite Function↔Workflow execution cycle.
 
-## Backoffice business processing
+## Definition and relation reads
 
 ```text
 GET /api/v1/workspaces/{workspace_id}/definitions
@@ -73,16 +73,21 @@ The collection accepts `kind`, `family_id`, `limit` (1–100), and `offset`;
 summaries. These workspace reads are canonical local reads, not
 Meilisearch or Graph projections.
 
+The following binding and submission examples assume a configured workspace
+with the referenced object types, schemas, relations, and Task definitions.
+New workspaces start empty; define object types with `object_type.define` and
+define any required relations before creating objects or publishing bindings.
+
 Task `data_bindings` is an optional list of at most 32 semantic record bindings.
-UI layout, widgets and form drafts remain Backoffice-owned. Each binding has:
+UI layout, widgets and form drafts remain client-owned. Each binding has:
 
 ```json
 {
-  "id": "quote",
-  "object_type_id": "<quote-type-id>",
+  "id": "record",
+  "object_type_id": "<record-type-id>",
   "schema_version": 2,
   "context_key": "object_id",
-  "writable_fields": ["amount"],
+  "writable_fields": ["description"],
   "allow_title": true,
   "allowed_operations": ["object.update"]
 }
@@ -119,11 +124,11 @@ Function binding and pinned object checks remain domain preconditions.
   "workflow_step_id": "review",
   "workflow_route_id": "<route-id-from-inbox>",
   "changes": [{
-    "binding_id": "quote",
+    "binding_id": "record",
     "command_type": "object.update",
-    "target": {"aggregate_type": "object_instance", "aggregate_id": "<quote-id>"},
-    "preconditions": [{"aggregate_type": "object_instance", "aggregate_id": "<quote-id>", "expected_version": 1}],
-    "payload": {"values": {"amount": 120}}
+    "target": {"aggregate_type": "object_instance", "aggregate_id": "<record-id>"},
+    "preconditions": [{"aggregate_type": "object_instance", "aggregate_id": "<record-id>", "expected_version": 1}],
+    "payload": {"values": {"description": "Reviewed"}}
   }]
 }
 ```
@@ -158,7 +163,7 @@ transaction boundary, not client-side sequential saves disguised as one submit.
 ### Submission-local references and automatic numbers
 
 Each new `object.create` may carry a unique `client_ref` (a bounded Workflow-style
-identifier). A reference is the singleton JSON object `{"client_ref":"quote"}`;
+identifier). A reference is the singleton JSON object `{"client_ref":"parent"}`;
 plain strings remain existing server IDs. References are accepted in create
 `relations`, `relation.link` endpoint fields and the `submission` value. They are
 resolved only within this request; unknown, duplicate, malformed and cyclic
@@ -168,20 +173,20 @@ index before validation; the server orders dependent creates and preserves the
 original index in errors. New link endpoints have server-known version 1; existing
 endpoint/definition preconditions still follow the ordinary command contract.
 
-For example, an existing customer is pinned in Work `context.customer_id`. The
-`quote` binding traverses incoming `quote.customer`; the `item` binding traverses
-incoming `quote.customer` then incoming `item.quote`. Both permit `object.create`
+For example, an existing root record is pinned in Work `context.root_id`. The
+`parent` binding traverses incoming `parent.root`; the `item` binding traverses
+incoming `parent.root` then incoming `item.parent`. Both permit `object.create`
 and `allow_title`. Schemas supply generated number fields, which are omitted from
 the request. A payload fragment is:
 
 ```json
 {
-  "submission": {"quote_id": {"client_ref": "q"}},
+  "submission": {"parent_id": {"client_ref": "p"}},
   "changes": [
-    {"binding_id":"item","client_ref":"i1","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 1","values":{},"relations":{"quote":{"client_ref":"q"}}}},
-    {"binding_id":"quote","client_ref":"q","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"quotes","title":"Quote","values":{},"relations":{"customer":"<existing-customer-id>"}}},
-    {"binding_id":"item","client_ref":"i2","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 2","values":{},"relations":{"quote":{"client_ref":"q"}}}},
-    {"binding_id":"item","client_ref":"i3","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 3","values":{},"relations":{"quote":{"client_ref":"q"}}}}
+    {"binding_id":"item","client_ref":"i1","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 1","values":{},"relations":{"parent":{"client_ref":"p"}}}},
+    {"binding_id":"parent","client_ref":"p","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"parents","title":"Parent","values":{},"relations":{"root":"<existing-root-id>"}}},
+    {"binding_id":"item","client_ref":"i2","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 2","values":{},"relations":{"parent":{"client_ref":"p"}}}},
+    {"binding_id":"item","client_ref":"i3","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 3","values":{},"relations":{"parent":{"client_ref":"p"}}}}
   ]
 }
 ```
@@ -198,11 +203,11 @@ returns the persisted mapping rather than allocating again.
 The success receipt adds `client_refs`, persisted in the parent command ledger:
 
 ```json
-{"client_refs":{"q":{"id":"<assigned-id>","version":1,"generated_values":{"number":"Q-001"}},"i1":{"id":"<assigned-id>","version":1,"generated_values":{"number":"I-001"}}}}
+{"client_refs":{"p":{"id":"<assigned-id>","version":1,"generated_values":{"number":"P-001"}},"i1":{"id":"<assigned-id>","version":1,"generated_values":{"number":"I-001"}}}}
 ```
 
 The Journal contains the resolved submission, so the next Workflow step receives
-actual IDs. Backoffice replaces draft IDs/numbers only after a successful receipt.
+actual IDs. Clients replace draft IDs/numbers only after a successful receipt.
 On an uncertain network result it retries the exact same command. On rejection it
 keeps all drafts. Per-change validation errors add `error.details` with
 `change_index` (zero-based original order), `client_ref`, `binding_id`, `field`
@@ -267,10 +272,12 @@ Request:
 `key` is optional. Workspace creation atomically provisions:
 
 - the `workspaces` row;
-- the reserved `people` and `companies` object types for the workspace;
-- the deterministic own workspace company object;
-- the reserved `works_for` relation definition, without a creator Person or relation;
 - the idempotency/provisioning record.
+
+The new workspace has no domain object types, objects, or relation definitions.
+Before creating an object, define its type with `object_type.define`; see the
+[Kernel command contract](kernel-command-contract.md#payload-schema)
+for the definition payload.
 
 Repeating the same request with the same scoped idempotency key returns the
 stored result with duplicate status. Reusing the idempotency key with different
@@ -289,8 +296,6 @@ idempotent duplicate:
     "name": "Acme Research",
     "version": 1,
     "creator_principal_id": "local",
-    "workspace_company_object_instance_id": "obj_company_wks_...",
-    "works_for_relation_definition_id": "rdf_builtin_works_for_wks_...",
     "created_at": "2026-09-01T00:00:00Z",
     "created": true,
     "status": "created"
@@ -312,7 +317,8 @@ This endpoint is the Kernel execution boundary for API callers. Embedded Rhiza
 owns HA replication and recovery; the server does not expose command-log repair
 or confirmed-replay endpoints.
 
-The Go SQLite support mode accepts an 8 MiB JSON command envelope.
+The Go SQLite support mode accepts an 8 MiB JSON command envelope. The example
+assumes `contracts` has already been defined in this workspace.
 
 Request:
 
@@ -346,7 +352,8 @@ Request:
 
 ## Update Object
 
-`object.update` updates a normal object instance, including a `person`. The
+`object.update` updates an object instance. The example assumes a configured
+person type whose schema includes `display_name` and `email`. The
 command targets the object id and requires exactly one matching
 `object_instance` precondition with the current version. Its payload contains
 `title`, `values`, or both:
@@ -390,7 +397,7 @@ through `object.move`.
 ## Evolve Object Type Schema
 
 `object_type.schema_evolve` publishes a complete immutable field-schema snapshot.
-It targets one active, non-built-in `object_type` and requires that type's current
+It targets one active `object_type` and requires that type's current
 aggregate version as its CAS precondition. The payload is:
 
 ```json
@@ -473,7 +480,7 @@ HTTP mapping:
 GET /api/v1/workspaces/{workspace_id}/objects/{object_id}
 ```
 
-Response:
+Response from an example workspace where `contracts` has been defined:
 
 ```json
 {
@@ -694,7 +701,7 @@ GET /api/v1/workspaces/{workspace_id}/command-surface
 
 Returns definition-backed object nouns and command metadata for a workspace.
 
-Response:
+Response from an example workspace with the shown types and relation configured:
 
 ```json
 {
@@ -712,10 +719,10 @@ Response:
       "state_machine_id": null,
       "relations": [
         {
-          "id": "rdf_customer_contracts",
-          "key": "customer_contracts",
+          "id": "rdf_project_contracts",
+          "key": "project_contracts",
           "version": 1,
-          "from_object_type_id": "otp_customer",
+          "from_object_type_id": "otp_project",
           "to_object_type_id": "otp_contract",
           "cardinality": "one_to_many"
         }
@@ -728,9 +735,7 @@ Response:
 This noun shape is a breaking contract. `key` is the required plural slug and
 the only dynamic dispatch key; `singular` supplies one-object prose and
 `plural` labels the collection group. All three are emitted explicitly. There
-is no separate `slug`, singular-key alias, fallback, or inflection. Built-in
-keys follow the same rule: `people` and `companies` have singular names
-`person` and `company`. No pre-existing user-defined object types are migrated
+is no separate `slug`, singular-key alias, fallback, or inflection. No pre-existing user-defined object types are migrated
 by this contract.
 
 `object_type_id` is the stable canonical identity. Noun strings do not replace
@@ -743,7 +748,7 @@ fresh schema has no template table. Existing v2 databases are rejected rather
 than silently modified; retain a backup and perform a separately planned logical
 data migration into a fresh database (and fresh Rhiza cluster identity/storage).
 No automatic migration or deletion of existing database files is performed.
-Backoffice owns screen layouts and widgets; Compos retains schemas, semantic
+Clients own screen layouts and widgets; Compos retains schemas, semantic
 Task bindings and atomic submission validation.
 
 ## Adapter Inbound Events
@@ -796,10 +801,7 @@ into the request Journal and `_compos` outbox metadata on SQLite and Rhiza;
 dispatch retry retains that snapshot. The revision means logical authorization
 generation, not an internal OAuth token refresh/CAS version.
 
-Revisionless connections remain the existing legacy service integration, not a
-fallback for a new user-profile authorization path. These pins do not prove
-profile ownership, consent or permission; user-profile resolution and GoAuthy's
-optional credential extension are not implemented by this contract.
+These pins do not prove profile ownership, consent or permission.
 
 ### Conductor dispatch acknowledgment
 

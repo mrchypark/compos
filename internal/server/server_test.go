@@ -53,23 +53,15 @@ func TestHTTPWorkspaceRegistryAndCommandCompatibility(t *testing.T) {
 	if !bytes.Equal(firstAdapter.Body.Bytes(), secondAdapter.Body.Bytes()) {
 		t.Fatalf("idempotent adapter response changed: first=%s second=%s", firstAdapter.Body.String(), secondAdapter.Body.String())
 	}
-	var builtins int
-	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM object_types WHERE workspace_id=? AND key IN ('people','companies')`, workspaceID).Scan(&builtins); err != nil {
-		t.Fatal(err)
+	var types, revisions, definitions, objects, relations, slots, indexes, requests int
+	err = s.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM object_types WHERE workspace_id=?), (SELECT COUNT(*) FROM object_type_schema_revisions WHERE workspace_id=?), (SELECT COUNT(*) FROM relation_definitions WHERE workspace_id=?), (SELECT COUNT(*) FROM object_instances WHERE workspace_id=?), (SELECT COUNT(*) FROM object_relations WHERE workspace_id=?), (SELECT COUNT(*) FROM relation_cardinality_slots WHERE workspace_id=?), (SELECT COUNT(*) FROM object_field_index WHERE workspace_id=?), (SELECT COUNT(*) FROM workspace_creation_requests WHERE workspace_id=?)`, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID).Scan(&types, &revisions, &definitions, &objects, &relations, &slots, &indexes, &requests)
+	if err != nil || types != 0 || revisions != 0 || definitions != 0 || objects != 0 || relations != 0 || slots != 0 || indexes != 0 || requests != 1 {
+		t.Fatalf("workspace contents=%d,%d,%d,%d,%d,%d,%d,%d err=%v", types, revisions, definitions, objects, relations, slots, indexes, requests, err)
 	}
-	if builtins != 2 {
-		t.Fatalf("built-in object types=%d", builtins)
-	}
-	var worksFor int
-	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM relation_definitions WHERE workspace_id=? AND key='works_for'`, workspaceID).Scan(&worksFor); err != nil {
-		t.Fatal(err)
-	}
-	if worksFor != 1 {
-		t.Fatal("works_for was not provisioned")
-	}
-	var people, relations int
-	if err := s.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM object_instances WHERE workspace_id=? AND object_type_id=?), (SELECT COUNT(*) FROM object_relations WHERE workspace_id=?)`, workspaceID, "otp_builtin_person_"+workspaceID, workspaceID).Scan(&people, &relations); err != nil || people != 0 || relations != 0 || createdData["creator_person_object_instance_id"] != nil || createdData["works_for_object_relation_id"] != nil {
-		t.Fatalf("unexpected creator person or relation: people=%d relations=%d response=%v err=%v", people, relations, createdData, err)
+	for _, field := range []string{"workspace_company_object_instance_id", "works_for_relation_definition_id", "creator_person_object_instance_id", "works_for_object_relation_id"} {
+		if _, exists := createdData[field]; exists {
+			t.Fatalf("unexpected response field %q: %v", field, createdData)
+		}
 	}
 	registry := request(t, handler, "GET", "/api/v1/kernel/command-registry", nil)
 	if registry.Code != 200 {
@@ -85,6 +77,25 @@ func TestHTTPWorkspaceRegistryAndCommandCompatibility(t *testing.T) {
 	}
 	if !bytes.Contains(response.Body.Bytes(), []byte(`"outcome":"applied"`)) {
 		t.Fatal(response.Body.String())
+	}
+	var typeID string
+	if err := s.DB().QueryRow(`SELECT id FROM object_types WHERE workspace_id=? AND key='orders'`, workspaceID).Scan(&typeID); err != nil {
+		t.Fatal(err)
+	}
+	collection := "/api/v1/workspaces/" + workspaceID + "/object-types/" + typeID + "/objects"
+	createdObject := request(t, handler, http.MethodPost, collection, map[string]any{"title": "Order", "values": map[string]any{}, "idempotency_key": "order-create"})
+	if createdObject.Code != http.StatusOK || !bytes.Contains(createdObject.Body.Bytes(), []byte(`"outcome":"applied"`)) {
+		t.Fatalf("create object: %d %s", createdObject.Code, createdObject.Body.String())
+	}
+	var objectID string
+	if err := s.DB().QueryRow(`SELECT id FROM object_instances WHERE workspace_id=? AND object_type_id=?`, workspaceID, typeID).Scan(&objectID); err != nil {
+		t.Fatal(err)
+	}
+	read := request(t, handler, http.MethodGet, "/api/v1/workspaces/"+workspaceID+"/objects/"+objectID, nil)
+	updated := request(t, handler, http.MethodPatch, collection+"/"+objectID, map[string]any{"title": "Updated", "idempotency_key": "order-update", "expected_version": 1})
+	archived := request(t, handler, http.MethodDelete, collection+"/"+objectID, map[string]any{"idempotency_key": "order-delete", "expected_version": 2})
+	if read.Code != http.StatusOK || !bytes.Contains(read.Body.Bytes(), []byte(`"title":"Order"`)) || updated.Code != http.StatusOK || archived.Code != http.StatusOK {
+		t.Fatalf("object CRUD: read=%d %s update=%d %s delete=%d %s", read.Code, read.Body.String(), updated.Code, updated.Body.String(), archived.Code, archived.Body.String())
 	}
 	command["command_id"], command["idempotency_key"] = "cmd_2", "idem_2"
 	command["payload"] = map[string]any{"key": "invoices", "singular": "Invoice", "plural": "Invoices", "field_schema": map[string]any{"type": "object"}}
@@ -142,8 +153,8 @@ func TestRhizaWorkspaceCreationIsAtomicIdempotentAndConcurrent(t *testing.T) {
 		(SELECT COUNT(*) FROM relation_cardinality_slots WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM object_field_index WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM workspace_creation_requests WHERE workspace_id=?)`, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID).Scan(&types, &revisions, &definitions, &objects, &relations, &slots, &indexes, &requests)
-	if err != nil || types != 2 || revisions != 2 || definitions != 1 || objects != 1 || relations != 0 || slots != 0 || indexes != 1 || requests != 1 {
-		t.Fatalf("builtins=%d,%d,%d,%d,%d,%d,%d,%d err=%v", types, revisions, definitions, objects, relations, slots, indexes, requests, err)
+	if err != nil || types != 0 || revisions != 0 || definitions != 0 || objects != 0 || relations != 0 || slots != 0 || indexes != 0 || requests != 1 {
+		t.Fatalf("workspace contents=%d,%d,%d,%d,%d,%d,%d,%d err=%v", types, revisions, definitions, objects, relations, slots, indexes, requests, err)
 	}
 	commandResponse := request(t, handler, "POST", "/api/v1/kernel/commands", map[string]any{
 		"command_id": "cmd_workspace_rhiza", "idempotency_key": "idem_workspace_rhiza", "workspace_id": workspaceID,
@@ -179,6 +190,48 @@ func TestRhizaWorkspaceCreationIsAtomicIdempotentAndConcurrent(t *testing.T) {
 	var concurrentWorkspaces int
 	if err := s.ReadRow(ctx, store.ReadLinearizable, `SELECT COUNT(*) FROM workspaces WHERE key='concurrent'`).Scan(&concurrentWorkspaces); err != nil || winners != 1 || conflicts != 7 || concurrentWorkspaces != 1 {
 		t.Fatalf("concurrent winners=%d conflicts=%d workspaces=%d err=%v", winners, conflicts, concurrentWorkspaces, err)
+	}
+
+	statuses = make(chan int, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			statuses <- request(t, handler, "POST", "/api/v1/workspaces", map[string]any{"name": "Same", "key": "same", "idempotency_key": "same"}).Code
+		}()
+	}
+	wg.Wait()
+	close(statuses)
+	winners, duplicates := 0, 0
+	for status := range statuses {
+		if status == http.StatusCreated {
+			winners++
+		} else if status == http.StatusOK {
+			duplicates++
+		}
+	}
+	var sameWorkspaces, sameRequests int
+	err = s.ReadRow(ctx, store.ReadLinearizable, `SELECT (SELECT COUNT(*) FROM workspaces WHERE key='same'), (SELECT COUNT(*) FROM workspace_creation_requests WHERE idempotency_key='same')`).Scan(&sameWorkspaces, &sameRequests)
+	if err != nil || winners != 1 || duplicates != 7 || sameWorkspaces != 1 || sameRequests != 1 {
+		t.Fatalf("concurrent idempotency winners=%d duplicates=%d workspaces=%d requests=%d err=%v", winners, duplicates, sameWorkspaces, sameRequests, err)
+	}
+}
+
+func TestWorkspaceCreationRollsBackOnRequestFailure(t *testing.T) {
+	s, err := store.Open(context.Background(), store.Options{Path: filepath.Join(t.TempDir(), "compos.sqlite")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB().Exec(`CREATE TRIGGER fail_workspace_request BEFORE INSERT ON workspace_creation_requests BEGIN SELECT RAISE(ABORT, 'test failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	handler := newTestServer(s)
+	defer handler.Close()
+	response := request(t, handler, http.MethodPost, "/api/v1/workspaces", map[string]any{"name": "Rollback", "key": "rollback", "idempotency_key": "rollback"})
+	var count int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM workspaces WHERE key='rollback'`).Scan(&count); err != nil || response.Code != http.StatusInternalServerError || count != 0 {
+		t.Fatalf("rollback status=%d workspaces=%d err=%v", response.Code, count, err)
 	}
 }
 

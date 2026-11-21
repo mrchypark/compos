@@ -29,6 +29,7 @@ RUN apt-get update \
     && chown -R compos:compos /app /data
 
 COPY --from=go-build /out/compos-server /usr/local/bin/compos-server
+COPY LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_LICENSES.txt /usr/share/doc/compos/
 
 USER compos
 WORKDIR /app
@@ -45,5 +46,6 @@ CMD ["compos-server"]
 FROM gcr.io/distroless/static-debian13:nonroot AS search-syncer
 
 COPY --from=go-tools /out/compos-search-syncer /usr/local/bin/compos-search-syncer
+COPY LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_LICENSES.txt /usr/share/doc/compos/
 
 ENTRYPOINT ["/usr/local/bin/compos-search-syncer"]

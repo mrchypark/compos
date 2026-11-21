@@ -229,7 +229,7 @@ func TestSyncOnceDoesNotAdvanceCursorWhenEventFails(t *testing.T) {
 }
 
 func TestObjectSearchIDIsStableAndWorkspaceScoped(t *testing.T) {
-	canonicalID := "obj_backoffice/workerp/samplecustomer/v1"
+	canonicalID := "obj_example/type/record/v1"
 	first := objectSearchID("wks_1", canonicalID)
 	if first != objectSearchID("wks_1", canonicalID) || first == objectSearchID("wks_2", canonicalID) {
 		t.Fatalf("unexpected IDs: %q %q", first, objectSearchID("wks_2", canonicalID))
@@ -286,7 +286,7 @@ func TestProcessObjectEventsUsesProjectionEventTypeAndCanonicalPayload(t *testin
 	defer meili.Close()
 	client := meilisearch.New(meili.URL)
 	cfg := Config{IndexUID: "objects"}
-	canonicalID := "obj_backoffice/workerp/samplecustomer/v1"
+	canonicalID := "obj_example/type/record/v1"
 	searchID := objectSearchID("wks_1", canonicalID)
 	if err := indexDocuments(context.Background(), client, cfg, []Object{{ID: canonicalID, WorkspaceID: "wks_1", ObjectTypeKey: "orders", Title: "Snapshot"}}); err != nil {
 		t.Fatal(err)

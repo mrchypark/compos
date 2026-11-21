@@ -22,8 +22,6 @@ New product work must follow the ADRs and specs under `docs/`.
 
 The product's highest-level vocabulary and boundaries are defined by the
 [Compos Constitutional Architecture](docs/architecture/constitutional-architecture.md).
-Its staged implementation is tracked in the
-[Constitutional Architecture Implementation Plan](docs/plans/constitutional-architecture-implementation.md).
 
 ## Non-Negotiables
 
@@ -65,15 +63,15 @@ Its staged implementation is tracked in the
   generic object, relation, automation, and deletion commands.
 - SQLite is a declared local/test single-node support mode. Embedded Rhiza owns
   production canonical commits, checkpoint bootstrap, replicated logs, and
-  recovery. The tg900 deployment is one Rhiza node with `emptyDir` plus GCS
-  `before-ack` durability: it verifies recovery durability, not multi-node HA.
+  recovery. A single Rhiza node with remote `before-ack` durability can recover
+  from object storage, but does not provide multi-node HA.
 - Compos has no authentication or authorization mode. HTTP routes accept requests
   without credentials and attribute every request to the fixed principal `local`.
   Protected deployments must enforce access control and authenticate callers at
   the trusted network boundary before traffic reaches Compos. Compos does not
   receive or propagate caller identity. Kernel actors are attribution metadata.
-  Workspace creation records `local` as the creator principal for attribution;
-  it does not create or link a creator `people` object.
+  Workspace creation records `local` as the creator principal for attribution
+  and starts with an empty domain model.
   There is no dev fallback, local account/session API, membership table, or
   capability management endpoint, and no principal-person auth binding.
 - See `docs/adr/0002-go-sqlite-runtime.md` for schema, JSON, concurrency,
@@ -95,8 +93,7 @@ Its staged implementation is tracked in the
 
 Object-type naming is a breaking contract: every definition must provide a
 plural slug in `key` plus explicit `singular` and `plural` names. There is no
-separate slug field, alias, fallback, or inflection. The reserved built-in keys
-are `people` and `companies`.
+separate slug field, alias, fallback, or inflection.
 Object type and object instance IDs remain the stable persisted identifiers and
 are never derived from display names.
 
@@ -144,3 +141,10 @@ Requests then use `http://127.0.0.1:3000` without credentials and are audited as
 the fixed principal `local`. The SQLite path is standalone only. Set `-rhiza-data` for a single-node
 Rhiza durable runtime; supply more than one `COMPOS_RHIZA_MEMBERS` entry and a
 `before-ack` object store for HA.
+
+## License
+
+Compos is licensed under the [Apache License 2.0](LICENSE). See the
+[third-party notices](THIRD_PARTY_NOTICES.md) and
+[third-party license texts](THIRD_PARTY_LICENSES.txt) for dependencies and
+remaining notice review.

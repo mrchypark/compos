@@ -34,7 +34,9 @@ status=$(curl --max-time 5 -sS -o "$results/workspace.json" -w '%{http_code}' \
   "$base/api/v1/workspaces")
 [ "$status" = 201 ]
 workspace=$(jq -er '.data.id' "$results/workspace.json")
-jq -e '.data | (has("creator_person_object_instance_id") | not) and (has("works_for_object_relation_id") | not)' "$results/workspace.json" >/dev/null
-curl --max-time 5 -fsS "$base/api/v1/workspaces/$workspace/objects?object_type=people" > "$results/people.json"
-jq -e '.data == []' "$results/people.json" >/dev/null
-printf '%s\n' 'health=passed' 'workspace_create=passed' 'no_creator_person=passed' > "$results/smoke.env"
+jq -e '.data | [has("creator_person_object_instance_id"), has("works_for_object_relation_id"), has("workspace_company_object_instance_id"), has("works_for_relation_definition_id")] | all(. == false)' "$results/workspace.json" >/dev/null
+curl --max-time 5 -fsS "$base/api/v1/workspaces/$workspace/command-surface" > "$results/surface.json"
+jq -e '.nouns == []' "$results/surface.json" >/dev/null
+curl --max-time 5 -fsS "$base/api/v1/workspaces/$workspace/objects" > "$results/objects.json"
+jq -e '.data == []' "$results/objects.json" >/dev/null
+printf '%s\n' 'health=passed' 'workspace_create=passed' 'workspace_empty=passed' > "$results/smoke.env"

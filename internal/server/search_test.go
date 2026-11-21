@@ -48,7 +48,7 @@ func TestSearchProxiesMeilisearchWithWorkspaceFilter(t *testing.T) {
 }
 
 func TestSearchPreservesCanonicalObjectIDAndRequestedAttributes(t *testing.T) {
-	const canonicalID = "obj_backoffice/workerp/samplecustomer/v1"
+	const canonicalID = "obj_example/type/record/v1"
 	search := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Attributes []string `json:"attributesToRetrieve"`
