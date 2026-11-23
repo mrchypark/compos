@@ -6,6 +6,7 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 mkdir "$tmp/bin" "$tmp/results"
 cat > "$tmp/bin/go" <<'EOF'
 #!/bin/sh
+echo 'go: downloading example.test/dependency' >&2
 case "$*" in
   *'TestReleaseSingleNode(ArchiveRecovery|Replay|CrashRecovery|ProviderFencing)'*|*'TestReleaseSingleNode(ArchiveRecovery|Replay|CrashRecovery)'*) ;;
   *) exit 2 ;;
@@ -28,8 +29,9 @@ EOF
 chmod +x "$tmp/bin/go"
 PATH="$tmp/bin:$PATH"; export PATH
 cd "$root"
-CASE=pass sh scripts/release/storage-gate.sh "$tmp/results" >/dev/null
-CASE=pass sh scripts/release/storage-gate.sh "$tmp/results" recovery >/dev/null
+CASE=pass sh scripts/release/storage-gate.sh "$tmp/results" >/dev/null 2>&1
+CASE=pass sh scripts/release/storage-gate.sh "$tmp/results" recovery >/dev/null 2>&1
+grep -qx 'go: downloading example.test/dependency' "$tmp/results/storage-stderr.log"
 for test in ArchiveRecovery Replay CrashRecovery; do
   for provider in filesystem s3 gcs azure; do
     if MISSING="TestReleaseSingleNode$test/$provider" sh scripts/release/storage-gate.sh "$tmp/results" recovery >/dev/null 2>&1; then

@@ -12,7 +12,8 @@ mkdir -p "$results"
 status=0
 go test -json -count=1 -timeout=15m ./internal/store \
   -run "^TestReleaseSingleNode($tests)$" \
-  > "$results/storage.jsonl" 2>&1 || status=$?
+  > "$results/storage.jsonl" 2> "$results/storage-stderr.log" || status=$?
+cat "$results/storage-stderr.log" >&2
 cat "$results/storage.jsonl"
 blocked=0
 : > "$results/storage-coverage.env"
