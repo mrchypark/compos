@@ -82,7 +82,7 @@ jobs:
   image:
     # Run image diagnostics even when the separate storage gate is blocked.
     if: ${{ always() && !cancelled() }}
-    needs: verify
+    needs: [verify, recovery]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -112,14 +112,14 @@ jobs:
       - name: Health, workspace and Person image smoke
         run: sh scripts/release/server-smoke.sh "$SERVER_IMAGE" release-results
       - name: Login to GHCR
-        if: inputs.publish && needs.verify.result == 'success'
+        if: inputs.publish && needs.verify.result == 'success' && needs.recovery.result == 'success'
         uses: docker/login-action@v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push exactly the smoke-tested image
-        if: inputs.publish && needs.verify.result == 'success'
+        if: inputs.publish && needs.verify.result == 'success' && needs.recovery.result == 'success'
         shell: sh
         run: |
           docker push "$SERVER_IMAGE" > release-results/push.log 2>&1
