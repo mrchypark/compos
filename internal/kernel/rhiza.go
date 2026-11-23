@@ -15,16 +15,15 @@ import (
 	"github.com/mrchypark/rhiza"
 )
 
-func (e *Executor) executeRhiza(ctx context.Context, principal string, c Command) (receipt Receipt, err error) {
+func (e *Executor) executeRhiza(ctx context.Context, principal string, actor Actor, c Command) (receipt Receipt, err error) {
 	defer func() { err = rhizaAvailabilityError(err) }()
 	if !map[string]bool{
 		"object_type.define": true, "object_type.schema_evolve": true,
 		"relation_definition.define": true, "object_type.delete": true, "relation_definition.delete": true,
 		"reactive_rule.define": true, "reactive_rule.publish_revision": true, "reactive_rule.disable": true,
 		"reactive_rule.retire": true, "reactive_rule.delete": true, "object.delete": true,
-		"event.emit": true, "knowledge.propose": true, "knowledge.review": true,
-		"knowledge.accept": true, "knowledge.remove": true,
-		"work.open": true, "work.route": true, "work.submit": true,
+		"event.emit": true,
+		"work.open":  true, "work.route": true, "work.submit": true,
 		"work.cancel": true, "work.record_deadline": true,
 		"object.create": true, "object.update": true, "object.move": true,
 		"relation.link": true, "relation.unlink": true,
@@ -40,7 +39,7 @@ func (e *Executor) executeRhiza(ctx context.Context, principal string, c Command
 	if err := json.Unmarshal(c.Payload, &payload); err != nil {
 		return Receipt{}, err
 	}
-	actor, guards, err := e.prepareRhiza(ctx, principal, c, payload)
+	guards, err := e.prepareRhiza(ctx, principal, c)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -65,14 +64,6 @@ func (e *Executor) executeRhiza(ctx context.Context, principal string, c Command
 		return e.archiveSimpleRhiza(ctx, principal, actor, c, guards, "object_instances", "object_instance", "object.deleted")
 	case "event.emit":
 		return e.emitDomainEventRhiza(ctx, principal, actor, c, payload, guards)
-	case "knowledge.propose":
-		return e.proposeKnowledgeRhiza(ctx, principal, actor, c, payload, guards)
-	case "knowledge.review":
-		return e.reviewKnowledgeRhiza(ctx, principal, actor, c, payload, guards)
-	case "knowledge.accept":
-		return e.acceptKnowledgeRhiza(ctx, principal, actor, c, payload, guards)
-	case "knowledge.remove":
-		return e.removeKnowledgeRhiza(ctx, principal, actor, c, payload, guards)
 	case "work.open":
 		return e.openWorkRhiza(ctx, principal, actor, c, payload, guards)
 	case "work.route":
@@ -201,7 +192,7 @@ func (e *Executor) defineReactiveRuleRhiza(ctx context.Context, principal string
 	hash, one := digestJSON([]byte(definitionJSON)), int64(1)
 	statements = append(statements,
 		rhiza.SQLStatement{SQL: `INSERT INTO reactive_rules(id,workspace_id,automation_id,rule_key,name,status,current_revision_id,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,'draft',NULL,1,?,?,?,?)`, Args: []any{id, c.WorkspaceID, payload["automation_id"], payload["rule_key"], payload["name"], ts, ts, principal, principal}, ExpectedRowsAffected: &one},
-		rhiza.SQLStatement{SQL: `INSERT INTO reactive_rule_revisions(id,workspace_id,rule_id,automation_id,definition_schema_version,definition_hash,requested_actor_json,permission_policy,trigger_json,predicates_json,action_json,idempotency_json,limits_json,created_at,created_by_principal_id) VALUES(?,?,?,?,1,?,?,'owner_principal',?,?,?,?,?,?,?)`, Args: []any{revision, c.WorkspaceID, id, payload["automation_id"], hash, actorJSON, canonical(payload["trigger"]), canonical(payload["predicates"]), canonical(payload["action"]), canonical(payload["idempotency"]), canonical(payload["limits"]), ts, principal}, ExpectedRowsAffected: &one},
+		rhiza.SQLStatement{SQL: `INSERT INTO reactive_rule_revisions(id,workspace_id,rule_id,automation_id,definition_schema_version,definition_hash,requested_actor_json,trigger_json,predicates_json,action_json,idempotency_json,limits_json,created_at,created_by_principal_id) VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?)`, Args: []any{revision, c.WorkspaceID, id, payload["automation_id"], hash, actorJSON, canonical(payload["trigger"]), canonical(payload["predicates"]), canonical(payload["action"]), canonical(payload["idempotency"]), canonical(payload["limits"]), ts, principal}, ExpectedRowsAffected: &one},
 	)
 	effect := makeEffect(id, "reactive_rule", 1, "reactive_rule.defined", map[string]any{"id": id, "revision_id": revision, "definition_hash": hash, "version": 1})
 	return e.commitRhiza(ctx, principal, actor, c, statements, effect, ts)
@@ -256,71 +247,14 @@ func (e *Executor) archiveSimpleRhiza(ctx context.Context, principal string, act
 	return e.commitRhiza(ctx, principal, actor, c, statements, effect, ts)
 }
 
-func (e *Executor) prepareRhiza(ctx context.Context, principal string, c Command, payload map[string]any) (Actor, []rhiza.SQLStatement, error) {
+func (e *Executor) prepareRhiza(ctx context.Context, principal string, c Command) ([]rhiza.SQLStatement, error) {
 	zero, one := int64(0), int64(1)
-	statements := []rhiza.SQLStatement{{SQL: `SELECT command_id FROM command_ledger WHERE workspace_id=? AND authenticated_principal_id=? AND idempotency_key=?`, Args: []any{c.WorkspaceID, principal, c.IdempotencyKey}, WantRows: true, ExpectedReturnedRows: &zero}}
-	var member int
-	if err := e.store.ReadRow(ctx, store.ReadLinearizable, `SELECT 1 FROM workspace_memberships WHERE workspace_id=? AND principal_id=?`, c.WorkspaceID, principal).Scan(&member); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Actor{}, nil, reject("forbidden", "workspace membership is required")
-		}
-		return Actor{}, nil, err
+	statements := []rhiza.SQLStatement{{SQL: `SELECT command_id FROM command_ledger WHERE workspace_id=? AND principal_id=? AND idempotency_key=?`, Args: []any{c.WorkspaceID, principal, c.IdempotencyKey}, WantRows: true, ExpectedReturnedRows: &zero}}
+	var exists int
+	if err := e.store.ReadRow(ctx, store.ReadLinearizable, `SELECT 1 FROM workspaces WHERE id=?`, c.WorkspaceID).Scan(&exists); err != nil {
+		return nil, reject("precondition_failed", "workspace does not exist")
 	}
-	statements = append(statements, rhiza.SQLStatement{SQL: `SELECT 1 FROM workspace_memberships WHERE workspace_id=? AND principal_id=?`, Args: []any{c.WorkspaceID, principal}, WantRows: true, ExpectedReturnedRows: &one})
-	if reactiveRuleLifecycleCommand(c.CommandType) {
-		var creator string
-		if err := e.store.ReadRow(ctx, store.ReadLinearizable, `SELECT created_by_principal_id FROM reactive_rules WHERE workspace_id=? AND id=? AND archived_at IS NULL`, c.WorkspaceID, *c.Target.AggregateID).Scan(&creator); err != nil {
-			return Actor{}, nil, reject("precondition_failed", "ReactiveRule does not exist")
-		}
-		if creator != principal {
-			return Actor{}, nil, reject("forbidden", "ReactiveRule lifecycle commands require the creator principal")
-		}
-		statements = append(statements, rhiza.SQLStatement{SQL: `SELECT 1 FROM reactive_rules WHERE workspace_id=? AND id=? AND archived_at IS NULL AND created_by_principal_id=?`, Args: []any{c.WorkspaceID, *c.Target.AggregateID, principal}, WantRows: true, ExpectedReturnedRows: &one})
-	}
-
-	actor := Actor{Type: "user", ID: principal}
-	if c.RequestedActor != nil {
-		actor = *c.RequestedActor
-		if actor.ID == "" {
-			return Actor{}, nil, reject("forbidden", "requested actor id is required")
-		}
-		if actor.Type == "user" {
-			if actor.ID != principal {
-				return Actor{}, nil, reject("forbidden", "user actor must match the authenticated principal")
-			}
-		} else {
-			if actor.Type != "service" && actor.Type != "automation" {
-				return Actor{}, nil, reject("forbidden", "requested actor type is invalid")
-			}
-			if actor.Type == "automation" && automationActorDenied(c.CommandType) {
-				return Actor{}, nil, reject("forbidden", "automation actor may not execute this command")
-			}
-			relation, _ := payload["relation_definition_id"].(string)
-			var capabilityID, capabilityRelation, prefix string
-			var max sql.NullInt64
-			err := e.store.ReadRow(ctx, store.ReadLinearizable, `SELECT id,relation_definition_id,idempotency_key_prefix,max_automation_recursion_depth FROM actor_capabilities WHERE workspace_id=? AND principal_id=? AND actor_type=? AND actor_id=? AND command_type=? AND causation_source=? AND relation_definition_id IN ('',?) ORDER BY relation_definition_id DESC LIMIT 1`, c.WorkspaceID, principal, actor.Type, actor.ID, c.CommandType, c.Causation.Source, relation).Scan(&capabilityID, &capabilityRelation, &prefix, &max)
-			if err != nil {
-				return Actor{}, nil, reject("forbidden", "requested actor capability is missing")
-			}
-			if !strings.HasPrefix(c.IdempotencyKey, prefix) {
-				return Actor{}, nil, reject("forbidden", "idempotency key is outside the actor capability")
-			}
-			if actor.Type == "automation" && max.Valid {
-				var automation struct {
-					RecursionDepth int64 `json:"recursion_depth"`
-				}
-				if len(c.Causation.Automation) == 0 || json.Unmarshal(c.Causation.Automation, &automation) != nil || automation.RecursionDepth > max.Int64 {
-					return Actor{}, nil, reject("automation_recursion_limit", "automation recursion limit exceeded")
-				}
-			}
-			var maxValue any
-			if max.Valid {
-				maxValue = max.Int64
-			}
-			statements = append(statements, rhiza.SQLStatement{SQL: `SELECT 1 FROM actor_capabilities WHERE id=? AND workspace_id=? AND principal_id=? AND actor_type=? AND actor_id=? AND command_type=? AND causation_source=? AND relation_definition_id=? AND idempotency_key_prefix=? AND max_automation_recursion_depth IS ?`, Args: []any{capabilityID, c.WorkspaceID, principal, actor.Type, actor.ID, c.CommandType, c.Causation.Source, capabilityRelation, prefix, maxValue}, WantRows: true, ExpectedReturnedRows: &one})
-		}
-	}
-
+	statements = append(statements, rhiza.SQLStatement{SQL: `SELECT 1 FROM workspaces WHERE id=?`, Args: []any{c.WorkspaceID}, WantRows: true, ExpectedReturnedRows: &one})
 	d, _ := definition(c.CommandType)
 	for _, required := range d.RequiredPreconditions {
 		found := false
@@ -328,30 +262,30 @@ func (e *Executor) prepareRhiza(ctx context.Context, principal string, c Command
 			found = found || precondition.AggregateType == required
 		}
 		if !found {
-			return Actor{}, nil, reject("precondition_failed", c.CommandType+" requires a "+required+" precondition")
+			return nil, reject("precondition_failed", c.CommandType+" requires a "+required+" precondition")
 		}
 	}
 	for _, precondition := range c.Preconditions {
 		if precondition.AggregateType == "object_instance" && e.workObjects[precondition.AggregateID] != nil {
 			if precondition.ExpectedVersion != 1 {
-				return Actor{}, nil, reject("precondition_failed", "new object precondition version must be 1")
+				return nil, reject("precondition_failed", "new object precondition version must be 1")
 			}
 			continue
 		}
 		table := map[string]string{"object_type": "object_types", "object_instance": "object_instances", "object_relation": "object_relations", "relation_definition": "relation_definitions", "reactive_rule": "reactive_rules"}[precondition.AggregateType]
 		if table == "" {
-			return Actor{}, nil, reject("precondition_failed", "unknown precondition aggregate_type")
+			return nil, reject("precondition_failed", "unknown precondition aggregate_type")
 		}
 		var version int64
 		if err := e.store.ReadRow(ctx, store.ReadLinearizable, `SELECT version FROM `+table+` WHERE workspace_id=? AND id=?`, c.WorkspaceID, precondition.AggregateID).Scan(&version); err != nil {
-			return Actor{}, nil, reject("precondition_failed", "precondition aggregate does not exist")
+			return nil, reject("precondition_failed", "precondition aggregate does not exist")
 		}
 		if version != precondition.ExpectedVersion {
-			return Actor{}, nil, reject("precondition_failed", "precondition version does not match")
+			return nil, reject("precondition_failed", "precondition version does not match")
 		}
 		statements = append(statements, rhiza.SQLStatement{SQL: `SELECT 1 FROM ` + table + ` WHERE workspace_id=? AND id=? AND version=?`, Args: []any{c.WorkspaceID, precondition.AggregateID, precondition.ExpectedVersion}, WantRows: true, ExpectedReturnedRows: &one})
 	}
-	return actor, statements, nil
+	return statements, nil
 }
 
 func rhizaAvailabilityError(err error) error {
@@ -580,7 +514,7 @@ func (e *Executor) commitRhiza(ctx context.Context, principal string, actor Acto
 	sequenceStatement := len(statements)
 	statements = append(statements, rhiza.SQLStatement{SQL: `SELECT COALESCE(MAX(projection_sequence),0)+1 AS projection_sequence FROM projection_events WHERE workspace_id=?`, Args: []any{c.WorkspaceID}, WantRows: true, ExpectedReturnedRows: &one})
 	statements = append(statements,
-		rhiza.SQLStatement{SQL: `INSERT INTO command_ledger(command_id,workspace_id,authenticated_principal_id,requested_actor_json,effective_actor_json,actor_context_hash,idempotency_key,command_type,target_json,preconditions_json,causation_json,payload_hash,payload_json,outcome,result_json,effective_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'applied',json_set(?, '$.projection_sequence', ? + ` + strconv.Itoa(len(e.rhizaSecondary)) + `),?,?)`, Args: []any{c.CommandID, c.WorkspaceID, principal, canonical(c.RequestedActor), canonical(actor), digestJSON([]byte(canonical(actor))), c.IdempotencyKey, c.CommandType, canonical(c.Target), canonical(c.Preconditions), canonical(c.Causation), digestJSON(c.Payload), string(c.Payload), canonical(receipt), nil, ts, ts}, ExpectedRowsAffected: &one, OutputRefs: []rhiza.SQLStatementOutputRef{{ArgIndex: 14, StatementIndex: sequenceStatement, ColumnName: "projection_sequence"}}},
+		rhiza.SQLStatement{SQL: `INSERT INTO command_ledger(command_id,workspace_id,principal_id,requested_actor_json,effective_actor_json,actor_context_hash,idempotency_key,command_type,target_json,preconditions_json,causation_json,payload_hash,payload_json,outcome,result_json,effective_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'applied',json_set(?, '$.projection_sequence', ? + ` + strconv.Itoa(len(e.rhizaSecondary)) + `),?,?)`, Args: []any{c.CommandID, c.WorkspaceID, principal, canonical(c.RequestedActor), canonical(actor), digestJSON([]byte(canonical(actor))), c.IdempotencyKey, c.CommandType, canonical(c.Target), canonical(c.Preconditions), canonical(c.Causation), digestJSON(c.Payload), string(c.Payload), canonical(receipt), nil, ts, ts}, ExpectedRowsAffected: &one, OutputRefs: []rhiza.SQLStatementOutputRef{{ArgIndex: 14, StatementIndex: sequenceStatement, ColumnName: "projection_sequence"}}},
 	)
 	statements = append(statements, journalStatements...)
 	for index, secondary := range e.rhizaSecondary {
@@ -615,7 +549,7 @@ func (e *Executor) commitRhiza(ctx context.Context, principal string, actor Acto
 
 func duplicateReceiptRhiza(ctx context.Context, db *store.Store, principal string, c Command) (Receipt, bool, error) {
 	var commandID, commandType, storedHash, target, preconditions, causation, requested, result string
-	err := db.ReadRow(ctx, store.ReadLinearizable, `SELECT command_id,command_type,payload_hash,target_json,preconditions_json,causation_json,requested_actor_json,result_json FROM command_ledger WHERE workspace_id=? AND authenticated_principal_id=? AND idempotency_key=?`, c.WorkspaceID, principal, c.IdempotencyKey).Scan(&commandID, &commandType, &storedHash, &target, &preconditions, &causation, &requested, &result)
+	err := db.ReadRow(ctx, store.ReadLinearizable, `SELECT command_id,command_type,payload_hash,target_json,preconditions_json,causation_json,requested_actor_json,result_json FROM command_ledger WHERE workspace_id=? AND principal_id=? AND idempotency_key=?`, c.WorkspaceID, principal, c.IdempotencyKey).Scan(&commandID, &commandType, &storedHash, &target, &preconditions, &causation, &requested, &result)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Receipt{}, false, nil
 	}

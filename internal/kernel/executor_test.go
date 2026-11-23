@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -23,10 +22,8 @@ func TestSQLiteExecutor_generatesUniqueNumbersAndDerivedRelationSchemas(t *testi
 	if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-		t.Fatal(err)
-	}
-	executor := NewExecutor(s.DB())
+
+	executor := testExecutor(s.DB())
 	executor.now = func() time.Time { return time.Date(2026, 1, 1, 1, 2, 3, 0, time.UTC) }
 
 	define := command("cmd_type_1", "idem_type_1", "object_type.define", "object_type", nil, map[string]any{
@@ -95,7 +92,7 @@ func TestRetiredObjectTypeTemplateSetIsRejectedBySQLite(t *testing.T) {
 	}
 	defer s.Close()
 	target := "otp_retired"
-	_, err = NewExecutor(s.DB()).Execute(ctx, "dev", command("cmd_retired_template", "idem_retired_template", "object_type.template_set", "object_type", &target, map[string]any{}))
+	_, err = testExecutor(s.DB()).Execute(ctx, "dev", command("cmd_retired_template", "idem_retired_template", "object_type.template_set", "object_type", &target, map[string]any{}))
 	var rejected *CommandError
 	if !errors.As(err, &rejected) || rejected.Outcome != "validation_failed" {
 		t.Fatalf("error=%v", err)
@@ -113,10 +110,8 @@ func TestObjectValuesUpdateRepinsLatestSchemaRevision(t *testing.T) {
 	if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-		t.Fatal(err)
-	}
-	executor := NewExecutor(s.DB())
+
+	executor := testExecutor(s.DB())
 
 	typeReceipt := execute(t, executor, "dev", command("cmd_schema_pin_type", "idem_schema_pin_type", "object_type.define", "object_type", nil, map[string]any{
 		"key": "notes", "singular": "Note", "plural": "Notes", "field_schema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}},
@@ -167,91 +162,6 @@ func TestReactiveRuleVisibilityAndActionAllowlist(t *testing.T) {
 		if definition.AutomationActionAllowed {
 			t.Fatalf("undocumented action %q is allowed", commandType)
 		}
-	}
-}
-
-func TestKnowledgeCommandsAreAtomicAndReplaceOutgoingState(t *testing.T) {
-	ctx := context.Background()
-	s, err := store.Open(ctx, store.Options{Path: filepath.Join(t.TempDir(), "knowledge.sqlite")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	now := "2026-01-01T00:00:00Z"
-	if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-		t.Fatal(err)
-	}
-	executor := NewExecutor(s.DB())
-	executor.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
-	defined, err := executor.Execute(ctx, "dev", command("cmd_customers", "idem_customers", "object_type.define", "object_type", nil, map[string]any{
-		"key": "customers", "singular": "Customer", "plural": "Customers", "field_schema": map[string]any{"type": "object"},
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	source := "---\ntype: Ontology Concept\ntitle: Customer\nunknown: keep\ncompos:\n  relations:\n    - predicate: hasOwner\n      target: people/person\n    - predicate: hasContract\n      target: contracts/contract\n  grounds:\n    - entity_definition: customers\n      mapping:\n        name: display_name\n---\nCustomer body"
-	accepted, err := executor.Execute(ctx, "dev", command("cmd_accept", "idem_accept", "knowledge.accept", "knowledge_document", nil, map[string]any{"bundle_id": "core", "path": "customer.md", "source_markdown": source}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if accepted.Aggregate.ID != "core:customer" {
-		t.Fatalf("aggregate=%#v", accepted.Aggregate)
-	}
-	for table, want := range map[string]int{"knowledge_documents": 1, "knowledge_relations": 2, "ontology_groundings": 1} {
-		var got int
-		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&got); err != nil || got != want {
-			t.Fatalf("%s count=%d want=%d err=%v", table, got, want, err)
-		}
-	}
-	var entityID, updatedAt string
-	if err := s.DB().QueryRow(`SELECT entity_definition_id FROM ontology_groundings`).Scan(&entityID); err != nil || entityID != defined.Aggregate.ID {
-		t.Fatalf("grounding entity=%q err=%v", entityID, err)
-	}
-	if err := s.DB().QueryRow(`SELECT updated_at FROM knowledge_documents`).Scan(&updatedAt); err != nil {
-		t.Fatal(err)
-	}
-	executor.now = func() time.Time { return time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC) }
-	if _, err := executor.Execute(ctx, "dev", command("cmd_accept_same", "idem_accept_same", "knowledge.accept", "knowledge_document", nil, map[string]any{"bundle_id": "core", "path": "customer.md", "source_markdown": source})); err != nil {
-		t.Fatal(err)
-	}
-	var unchanged string
-	_ = s.DB().QueryRow(`SELECT updated_at FROM knowledge_documents`).Scan(&unchanged)
-	if unchanged != updatedAt {
-		t.Fatalf("same content changed updated_at: %s -> %s", updatedAt, unchanged)
-	}
-
-	changed := strings.Replace(source, "    - predicate: hasContract\n      target: contracts/contract\n", "", 1)
-	if _, err := executor.Execute(ctx, "dev", command("cmd_accept_changed", "idem_accept_changed", "knowledge.accept", "knowledge_document", nil, map[string]any{"bundle_id": "core", "path": "customer.md", "source_markdown": changed})); err != nil {
-		t.Fatal(err)
-	}
-	var relationCount int
-	_ = s.DB().QueryRow(`SELECT COUNT(*) FROM knowledge_relations`).Scan(&relationCount)
-	if relationCount != 1 {
-		t.Fatalf("stale relations remain: %d", relationCount)
-	}
-
-	bad := strings.Replace(source, "entity_definition: customers", "entity_definition: missing", 1)
-	if _, err := executor.Execute(ctx, "dev", command("cmd_bad", "idem_bad", "knowledge.accept", "knowledge_document", nil, map[string]any{"bundle_id": "core", "path": "bad.md", "source_markdown": bad})); err == nil {
-		t.Fatal("expected invalid grounding rejection")
-	}
-	var badRows, badLedger int
-	_ = s.DB().QueryRow(`SELECT COUNT(*) FROM knowledge_documents WHERE concept_id='bad'`).Scan(&badRows)
-	_ = s.DB().QueryRow(`SELECT COUNT(*) FROM command_ledger WHERE command_id='cmd_bad'`).Scan(&badLedger)
-	if badRows != 0 || badLedger != 0 {
-		t.Fatalf("invalid accept was not rolled back: documents=%d ledger=%d", badRows, badLedger)
-	}
-
-	if _, err := executor.Execute(ctx, "dev", command("cmd_remove", "idem_remove", "knowledge.remove", "knowledge_document", nil, map[string]any{"bundle_id": "core", "concept_id": "customer"})); err != nil {
-		t.Fatal(err)
-	}
-	var remaining int
-	_ = s.DB().QueryRow(`SELECT COUNT(*) FROM knowledge_documents`).Scan(&remaining)
-	if remaining != 0 {
-		t.Fatalf("knowledge document remains after remove: %d", remaining)
 	}
 }
 

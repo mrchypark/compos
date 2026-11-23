@@ -15,7 +15,7 @@ Every business mutation in Compos is a Kernel command.
   },
   "command_type": "registered wire name; see command-registry.md or the runtime registry endpoint",
   "target": {
-    "aggregate_type": "registered aggregate type, including knowledge_document",
+    "aggregate_type": "registered aggregate type",
     "aggregate_id": "..."
   },
   "preconditions": [
@@ -27,7 +27,7 @@ Every business mutation in Compos is a Kernel command.
   ],
   "payload": {},
   "causation": {
-    "source": "cli|api|automation|adapter_reducer",
+    "source": "api|automation|adapter_reducer",
     "attempt_id": "local_attempt_id_or_null",
     "event_id": "optional_prior_event",
     "automation": {
@@ -110,7 +110,7 @@ derived from a creator-owned ReactiveRule:
 
 Unknown command types fail closed.
 
-Presentation templates are not Kernel commands or canonical data. Backoffice
+Presentation templates are not Kernel commands or canonical data. Clients
 owns layouts and widgets; Compos owns field schemas, semantic data bindings and
 submission validation. The retired `object_type.template_set` command is rejected
 as unregistered, without a compatibility alias.
@@ -153,8 +153,7 @@ that command.
 `key` is the plural slug. `singular` and `plural` are required independent
 values; the Kernel contract does not infer them and does not accept a separate
 `slug` or aliases. No pre-existing user-defined object types are migrated. New
-definitions use plural keys such as `contracts`; the reserved
-built-in keys are `people` and `companies`.
+definitions use plural keys such as `contracts`.
 
 Names are lookup and presentation metadata, not canonical IDs.
 `object_type_id` and all existing aggregate and relation IDs remain stable and
@@ -166,7 +165,7 @@ references require IDs.
 Idempotency scope is:
 
 ```text
-(workspace_id, authenticated_principal_id, idempotency_key)
+(workspace_id, principal_id, idempotency_key)
 ```
 
 Same scoped key and same payload hash returns the original result. Same scoped

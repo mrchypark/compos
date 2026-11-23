@@ -372,12 +372,13 @@ func (s *Server) executeWorkflowCommand(ctx context.Context, run workflowRun, pr
 	id := workflowCommandID(run.invocationID, stepID, action)
 	raw, _ := json.Marshal(payload)
 	eventID := run.invocationID
-	_, err := s.kernel.Execute(ctx, principalID, kernel.Command{
+	command := kernel.Command{
 		CommandID: id, IdempotencyKey: "workflow:" + run.invocationID + ":" + stepID + ":" + action,
 		WorkspaceID: run.workspaceID, RequestedActor: actor, CommandType: commandType,
 		Target: kernel.Target{AggregateType: "work_stream", AggregateID: &run.streamID}, Preconditions: []kernel.Precondition{}, Payload: raw,
 		Causation: kernel.Causation{Source: "workflow", EventID: &eventID},
-	})
+	}
+	_, err := s.kernel.Execute(ctx, principalID, command)
 	return err
 }
 

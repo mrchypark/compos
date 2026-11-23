@@ -16,17 +16,18 @@ func TestWorkSubmitChangesLinksNewClientRefsSQLite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'); INSERT INTO workspace_memberships VALUES('wks_1','dev','owner','2026-01-01T00:00:00Z')`); err != nil {
+	if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	runWorkSubmitChangesLinksNewClientRefs(t, NewExecutor(s.DB()), s)
+
+	runWorkSubmitChangesLinksNewClientRefs(t, testExecutor(s.DB()), s)
 }
 
 func TestWorkSubmitChangesLinksNewClientRefsRhiza(t *testing.T) {
 	ctx := context.Background()
 	s := openRhizaKernelStore(t, ctx, "kernel-work-link-refs")
 	defer s.Close()
-	runWorkSubmitChangesLinksNewClientRefs(t, NewStoreExecutor(s), s)
+	runWorkSubmitChangesLinksNewClientRefs(t, testStoreExecutor(s), s)
 }
 
 func runWorkSubmitChangesLinksNewClientRefs(t *testing.T, e *Executor, s *store.Store) {

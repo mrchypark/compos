@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/mrchypark/compos/internal/kernel"
 	"github.com/mrchypark/compos/internal/store"
@@ -70,20 +69,12 @@ func TestObjectRelationReadsHonorDirectionDefinitionAndWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	crossWorkspace := authRequest(t, handler, http.MethodGet, "/api/v1/workspaces/wks_other/objects/"+quote.Aggregate.ID+"/relations", token, nil)
-	if crossWorkspace.Code != http.StatusForbidden {
+	if crossWorkspace.Code != http.StatusNotFound {
 		t.Fatalf("cross-workspace relation read status=%d body=%s", crossWorkspace.Code, crossWorkspace.Body.String())
 	}
 }
 
 func definitionReadAuthToken(t *testing.T, db *store.Store, handler *Server) string {
 	t.Helper()
-	if err := handler.ConfigureAuth(AuthConfig{Mode: AuthModePocketBase, SessionTTL: time.Hour, AllowedEmailDomains: []string{"example.com"}, PocketBaseURL: "http://127.0.0.1", PocketBaseCollection: "users"}); err != nil {
-		t.Fatal(err)
-	}
-	token := "definition-read-session"
-	stamp := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := db.DB().Exec(`INSERT INTO auth_sessions(id,principal_id,token_hash,expires_at,created_at,last_used_at) VALUES('session_definition','dev',?,?,?,?)`, sessionTokenHash(token), time.Now().Add(time.Hour).Unix(), stamp, stamp); err != nil {
-		t.Fatal(err)
-	}
-	return token
+	return ""
 }

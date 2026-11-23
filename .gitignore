@@ -1,10 +1,6 @@
-target/
-node_modules/
-dist/
 .tmp/
 
 # Binaries
-/compos
 /search-syncer
 /search-syncer-linux
 

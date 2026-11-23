@@ -1,0 +1,114 @@
+name: verify and publish server GHCR
+
+on:
+  push:
+    branches: ['feature/**']
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'cmd/server/**'
+      - 'internal/**'
+      - 'Dockerfile'
+      - 'scripts/release/**'
+      - '.github/workflows/server-ghcr.yaml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the tested server image after all gates pass
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Record exact source and verification limits
+        shell: sh
+        run: |
+          mkdir -p release-results
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf '%s\n' "$GITHUB_SHA" > release-results/source-sha.txt
+          printf '%s\n' 'Upstream authentication gateway integration is not covered.' \
+            'Storage gates require real eventual archive recovery, replay, and provider fencing tests; async writes can be lost before archival.' \
+            > release-results/coverage.txt
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Go tests including typed queries and credential-free HTTP
+        run: go test -json -count=1 -timeout=20m ./... > release-results/go-tests.jsonl 2>&1
+      - name: Required single-node archive recovery and provider fencing
+        run: sh scripts/release/storage-gate.sh release-results
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: server-verification-${{ github.sha }}
+          path: release-results/
+          if-no-files-found: error
+
+  image:
+    # Run image diagnostics even when the separate storage gate is blocked.
+    if: ${{ always() && !cancelled() }}
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Image identity
+        shell: sh
+        run: |
+          mkdir -p release-results
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          image="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]'):sha-$GITHUB_SHA"
+          echo "SERVER_IMAGE=$image" >> "$GITHUB_ENV"
+          printf '%s\n' "$GITHUB_SHA" > release-results/source-sha.txt
+      - uses: docker/setup-buildx-action@v4.2.0
+      - name: Build server only and load before smoke
+        shell: sh
+        run: |
+          docker buildx build --target server --platform linux/amd64 --load \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$SERVER_IMAGE" --metadata-file release-results/build.json .
+          docker image inspect "$SERVER_IMAGE" > release-results/image.json
+      - name: Health, workspace and Person image smoke
+        run: sh scripts/release/server-smoke.sh "$SERVER_IMAGE" release-results
+      - name: Login to GHCR
+        if: inputs.publish && needs.verify.result == 'success'
+        uses: docker/login-action@v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push exactly the smoke-tested image
+        if: inputs.publish && needs.verify.result == 'success'
+        shell: sh
+        run: |
+          docker push "$SERVER_IMAGE" > release-results/push.log 2>&1
+          cat release-results/push.log
+          docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+            "$SERVER_IMAGE" > release-results/repo-digests.txt
+          grep -E '^ghcr.io/.+@sha256:[a-f0-9]{64}$' release-results/repo-digests.txt
+      - name: Upload image evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: server-image-${{ github.sha }}
+          path: release-results/
+          if-no-files-found: error

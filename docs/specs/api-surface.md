@@ -11,16 +11,15 @@ The Kernel command execution endpoint is:
 POST /api/v1/kernel/commands
 ```
 
-CLI writes must not call that endpoint before local durability. CLI writes
-first append the command intent to the embedded local request ledger, then
-submit the command to the Compos server. The server command endpoint does not
-publish a second command log; no S2 audit synchronization command remains.
+API clients submit command intents to the Compos server. The server command
+endpoint does not publish a second command log; no S2 audit synchronization
+command remains.
 
-Every mutation requires:
+Command envelopes include:
 
-- authenticated principal derived from credentials
-- requested effective actor
+- a requested actor, when supplied
 - workspace id
+- command id
 - command type
 - idempotency key
 - target
@@ -28,6 +27,9 @@ Every mutation requires:
 - command-specific payload
 
 The Kernel validates every mutation before committing.
+The HTTP server uses the fixed principal `local`; it does not authenticate
+callers or enforce permissions, capability grants, or workspace membership.
+Principal and actor fields are command and audit context, not proof of identity.
 
 ## Forbidden Mutating Routes
 
@@ -52,7 +54,7 @@ Canonical object and projection read responses declare consistency:
 - `canonical_linearizable`
 - `canonical_stale_bounded`
 
-CLI reads use canonical server endpoints. Mutations are still revalidated by the
+Reads use canonical server endpoints. Mutations are still revalidated by the
 Kernel.
 
 Human inboxes and work streams are read through
@@ -60,37 +62,21 @@ Human inboxes and work streams are read through
 `GET /api/v1/workspaces/{workspace_id}/work/{stream_id}`. Status and assignee
 are derived from immutable Journal facts rather than updated through CRUD routes.
 
-Accepted Knowledge and Ontology reads are:
-
-```text
-GET /api/v1/workspaces/{workspace_id}/knowledge
-GET /api/v1/workspaces/{workspace_id}/knowledge/{bundle_id}/{concept_id...}
-GET /api/v1/workspaces/{workspace_id}/ontology/traverse
-GET /api/v1/workspaces/{workspace_id}/ontology/reachable-node-ids
-GET /api/v1/workspaces/{workspace_id}/ontology/groundings
-GET /api/v1/workspaces/{workspace_id}/events
-GET /api/v1/workspaces/{workspace_id}/knowledge/proposals
-```
-
-Knowledge source export uses `format=source`. Canonical SQL serves grounding and
-duplicate-preserving path traversal (Rhiza in deployed mode; SQLite locally and
-in tests); Meilisearch serves the
-rebuildable full-text projection. A ready, explicitly
-configured Rhiza Graph projection serves only outgoing unique reachable Concept
-IDs; it never silently falls back to SQLite. Both graph APIs have fixed
-server-side result and expansion budgets; clients cannot increase them.
-Domain Event and Knowledge proposal writes use Kernel commands rather than CRUD.
+Domain Event reads use `GET /api/v1/workspaces/{workspace_id}/events` and writes
+use `event.emit`. Knowledge is externally owned; its former read and command
+endpoints, including Concept traversal and grounding, have been removed.
+Ontology revisions remain available through generic spec publication and reads.
 
 ## Import API
 
 Imports are Kernel commands or read-only snapshots. Imports must not bypass
-schema validation, authorization, state machines, relation constraints, command
+schema validation, state machines, relation constraints, command
 ledger, activity, outbox, or projection events.
 
 ## Adapter Ingress API
 
 Adapter callbacks may enter through append-only inbound event APIs. These routes
-require bearer authentication and workspace membership, record external evidence
-only, and must not change canonical business aggregate rows directly. Reducers
-turn inbound events into observations or Kernel command
-intents through the normal command path.
+do not authenticate callers or check workspace membership. They record external
+evidence only and must not change canonical business aggregate rows directly.
+Reducers turn inbound events into observations or Kernel command intents through
+the normal command path.

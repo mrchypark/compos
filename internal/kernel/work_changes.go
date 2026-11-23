@@ -156,9 +156,6 @@ func (e *Executor) submitWorkChanges(ctx context.Context, tx store.Tx, principal
 		if err := ValidateCommand(child); err != nil {
 			return Receipt{}, workChangeError(err, change.Index, change, "")
 		}
-		if _, err := authorize(ctx, tx, principal, child); err != nil {
-			return Receipt{}, workChangeError(err, change.Index, change, "")
-		}
 		if err := checkPreconditions(ctx, tx, child, references.objectsByID()); err != nil {
 			return Receipt{}, workChangeError(err, change.Index, change, "")
 		}
@@ -275,7 +272,7 @@ func (e *Executor) submitWorkChangesRhiza(ctx context.Context, principal string,
 		}
 		preparer := *e
 		preparer.workObjects = references.objectsByID()
-		_, childGuards, err := preparer.prepareRhiza(ctx, principal, child, change.Payload)
+		childGuards, err := preparer.prepareRhiza(ctx, principal, child)
 		if err != nil {
 			return Receipt{}, workChangeError(err, change.Index, change, "")
 		}

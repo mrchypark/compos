@@ -1082,7 +1082,7 @@ func submitWork(ctx context.Context, tx store.Tx, principal string, c Command, p
 	if (requestedStepID == "") != (requestedRouteID == "") {
 		return effect{}, reject("schema_mismatch", "workflow_step_id and workflow_route_id must be provided together")
 	}
-	workflowStepID, workflowRouteID, err := requireCurrentParticipant(ctx, tx, c.WorkspaceID, streamID, actor, requestedStepID, requestedRouteID, true)
+	workflowStepID, workflowRouteID, err := currentWorkRoute(ctx, tx, c.WorkspaceID, streamID, actor, requestedStepID, requestedRouteID, true)
 	if err != nil {
 		return effect{}, err
 	}
@@ -1155,7 +1155,7 @@ func invokeFunction(ctx context.Context, tx store.Tx, principal string, c Comman
 	if workflowRouteID != "" && c.Causation.Source != "workflow" {
 		return effect{}, reject("forbidden", "workflow_route_id is reserved for Workflow invocations")
 	}
-	if _, _, err := requireCurrentParticipant(ctx, tx, c.WorkspaceID, streamID, actor, "", workflowRouteID, false); err != nil {
+	if _, _, err := currentWorkRoute(ctx, tx, c.WorkspaceID, streamID, actor, "", workflowRouteID, false); err != nil {
 		return effect{}, err
 	}
 	functionID, _ := p["function_revision_id"].(string)
@@ -1814,16 +1814,20 @@ func participantFrom(raw any) (*Actor, error) {
 }
 
 func commandParticipant(c Command, principal string) *Actor {
-	if c.RequestedActor == nil || c.RequestedActor.Type == "user" {
+	if c.RequestedActor == nil {
 		return &Actor{Type: "human", ID: principal}
 	}
-	if c.RequestedActor.Type == "automation" {
+	switch c.RequestedActor.Type {
+	case "user", "human":
+		return &Actor{Type: "human", ID: c.RequestedActor.ID}
+	case "automation":
 		return &Actor{Type: "automation", ID: c.RequestedActor.ID}
+	default:
+		return &Actor{Type: "agent", ID: c.RequestedActor.ID}
 	}
-	return &Actor{Type: "agent", ID: c.RequestedActor.ID}
 }
 
-func requireCurrentParticipant(ctx context.Context, tx store.Tx, workspace, stream string, actor *Actor, requestedStepID, requestedRouteID string, unresolved bool) (string, string, error) {
+func currentWorkRoute(ctx context.Context, tx store.Tx, workspace, stream string, actor *Actor, requestedStepID, requestedRouteID string, unresolved bool) (string, string, error) {
 	var kind, id, stepID, routeID string
 	err := tx.QueryRowContext(ctx, `
 		SELECT participant_kind,participant_id,COALESCE(json_extract(payload_json,'$.workflow_step_id'),''),COALESCE(json_extract(payload_json,'$.workflow_route_id'),'')

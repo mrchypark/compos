@@ -32,12 +32,14 @@ func main() {
 	ctx := context.Background()
 	var db *store.Store
 	var err error
+	rhizaMemberCount := 0
 	if *rhizaData != "" {
 		clusterID, nodeID := env("COMPOS_RHIZA_CLUSTER_ID", "compos"), env("COMPOS_RHIZA_NODE_ID", "node-1")
 		members, peerToken, err := rhizaMembers(os.Getenv("COMPOS_RHIZA_MEMBERS"), os.Getenv("COMPOS_RHIZA_PEER_TOKENS"), clusterID, nodeID, os.Getenv("COMPOS_RHIZA_PEER_TOKEN"))
 		if err != nil {
 			log.Fatalf("Rhiza peer credentials: %v", err)
 		}
+		rhizaMemberCount = len(members)
 		insecure, err := strconv.ParseBool(env("COMPOS_RHIZA_OBJECT_INSECURE", "false"))
 		if err != nil {
 			log.Fatalf("parse COMPOS_RHIZA_OBJECT_INSECURE: %v", err)
@@ -91,40 +93,15 @@ func main() {
 		return
 	}
 	handler := server.New(db)
-	auth, err := server.AuthConfigFromEnv()
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err := handler.ConfigureAuth(auth); err != nil {
-		log.Fatal(err)
-	}
-	if name := os.Getenv("COMPOS_BOOTSTRAP_WORKSPACE_NAME"); name != "" {
-		if auth.Mode != server.AuthModePocketBase || auth.PocketBaseAutoWorkspaceID != "" {
-			log.Fatal("workspace bootstrap requires PocketBase mode without an explicit auto workspace ID")
-		}
-		workspaceID, err := handler.BootstrapLoginWorkspace(ctx, name)
-		if err != nil {
-			log.Fatal(err)
-		}
-		auth.PocketBaseAutoWorkspaceID = workspaceID
-		if err := handler.ConfigureAuth(auth); err != nil {
-			log.Fatal(err)
-		}
-		log.Printf("login workspace ready: %s", workspaceID)
-	}
-	syncerToken := os.Getenv("COMPOS_SEARCH_SYNCER_TOKEN")
 	syncerWorkspaceID := os.Getenv("COMPOS_SEARCH_SYNCER_WORKSPACE_ID")
-	if syncerWorkspaceID == "" && syncerToken != "" {
-		syncerWorkspaceID = auth.PocketBaseAutoWorkspaceID
-	}
-	if err := handler.ConfigureSearchSyncer(syncerToken, syncerWorkspaceID); err != nil {
+	if err := handler.ConfigureSearchSyncer(syncerWorkspaceID); err != nil {
 		log.Fatal(err)
 	}
 	if err := handler.EnableSearch(*searchURL, *searchIndex, os.Getenv("COMPOS_MEILISEARCH_API_KEY")); err != nil {
 		log.Fatal(err)
 	}
 	if *conductor != "" {
-		if err := handler.EnableConductor(*conductor, os.Getenv("COMPOS_CONDUCTOR_TOKEN"), os.Getenv("COMPOS_CONDUCTOR_CALLBACK_TOKEN")); err != nil {
+		if err := handler.EnableConductor(*conductor, os.Getenv("COMPOS_CONDUCTOR_TOKEN")); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -138,10 +115,21 @@ func main() {
 		defer cancel()
 		_ = httpServer.Shutdown(ctx)
 	}()
+	log.Printf("compos-server topology=%s", topologyLabel(db.Kind(), rhizaMemberCount))
 	log.Printf("compos-server listening on http://%s", *bind)
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func topologyLabel(storage string, members int) string {
+	if storage == "sqlite" {
+		return "standalone/sqlite"
+	}
+	if members > 1 {
+		return "ha/rhiza"
+	}
+	return "standalone/rhiza"
 }
 
 // rhizaMembers derives public membership identities from the private per-node

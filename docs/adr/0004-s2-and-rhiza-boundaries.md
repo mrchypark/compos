@@ -65,5 +65,5 @@ removed/updated. Existing remote S2 data, credentials, services and local bbolt
 files were not deleted. No runtime deployment or remote cleanup is authorized
 by this code-removal pass.
 
-The tg900 one-node deployment has remote durability and restart recovery, not
-multi-node write availability. S2 removal does not strengthen that guarantee.
+Single-node remote durability and restart recovery do not provide multi-node
+write availability. S2 removal does not strengthen that guarantee.

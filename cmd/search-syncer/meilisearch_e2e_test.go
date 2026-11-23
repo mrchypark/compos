@@ -20,7 +20,7 @@ import (
 )
 
 // TestMeilisearchE2EProjectionSync exercises the deployed Meilisearch engine.
-// It is intentionally opt-in: the supplied key must be restricted to compos-tg900-e2e-*.
+// It is intentionally opt-in: the supplied key must be restricted to compos-e2e-*.
 func TestMeilisearchE2EProjectionSync(t *testing.T) {
 	meiliURL, meiliKey := os.Getenv("COMPOS_E2E_MEILISEARCH_URL"), os.Getenv("COMPOS_E2E_MEILISEARCH_KEY")
 	if meiliURL == "" || meiliKey == "" {
@@ -37,7 +37,7 @@ func TestMeilisearchE2EProjectionSync(t *testing.T) {
 	compos := httptest.NewServer(handler)
 	defer compos.Close()
 
-	index := "compos-tg900-e2e-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	index := "compos-e2e-" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	cfg := Config{ComposEndpoint: compos.URL, MeilisearchURL: meiliURL, MeilisearchKey: meiliKey, IndexUID: index, PrimaryKey: "id", BatchSize: 100}
 	meili := newMeilisearchClient(cfg)
 	defer func() {
@@ -117,35 +117,6 @@ func TestMeilisearchE2EProjectionSync(t *testing.T) {
 	}
 	if e2eHasTitle(e2eSearch(t, compos.URL, workspaceA, "수정", nil, 20, 0), "수정 가나다 A") {
 		t.Fatal("archived object remains indexed")
-	}
-
-	// Knowledge commands are production kernel commands; same bundle/concept IDs must remain workspace-scoped.
-	t.Log("scenario: knowledge isolation")
-	e2eCommand(t, compos.URL, workspaceA, "accept-knowledge", "knowledge.accept", "knowledge_document", "", nil, map[string]any{"bundle_id": "core", "path": "search.md", "source_markdown": "---\ntype: Ontology Concept\ntitle: 지식 가나다\n---\n검색 지식"})
-	e2eCommand(t, compos.URL, workspaceB, "accept-knowledge-b", "knowledge.accept", "knowledge_document", "", nil, map[string]any{"bundle_id": "core", "path": "search.md", "source_markdown": "---\ntype: Ontology Concept\ntitle: 외부 지식 가나다\n---\n검색 지식"})
-	if err := syncOnce(ctx, compos.Client(), meili, cfg, &stateA); err != nil {
-		t.Fatalf("knowledge accept event: %v", err)
-	}
-	cfg.WorkspaceID = workspaceB
-	if err := syncOnce(ctx, compos.Client(), meili, cfg, &stateB); err != nil {
-		t.Fatalf("workspace B knowledge accept event: %v", err)
-	}
-	cfg.WorkspaceID = workspaceA
-	if !e2eHasTitle(e2eSearch(t, compos.URL, workspaceA, "지식", nil, 20, 0), "지식 가나다") {
-		t.Fatal("accepted knowledge was not indexed")
-	}
-	if hits := e2eSearchFiltered(t, compos.URL, workspaceA, "", `type = "knowledge"`, nil, 20, 0); len(hits) != 1 || hits[0] != "지식 가나다" {
-		t.Fatalf("type filter leaked or missed knowledge: %#v", hits)
-	}
-	e2eCommand(t, compos.URL, workspaceA, "remove-knowledge", "knowledge.remove", "knowledge_document", "", nil, map[string]any{"bundle_id": "core", "concept_id": "search"})
-	if err := syncOnce(ctx, compos.Client(), meili, cfg, &stateA); err != nil {
-		t.Fatalf("knowledge remove event: %v", err)
-	}
-	if e2eHasTitle(e2eSearch(t, compos.URL, workspaceA, "지식", nil, 20, 0), "지식 가나다") {
-		t.Fatal("removed knowledge remains indexed")
-	}
-	if !e2eHasTitle(e2eSearch(t, compos.URL, workspaceB, "외부 지식", nil, 20, 0), "외부 지식 가나다") {
-		t.Fatal("workspace A knowledge removal deleted workspace B document")
 	}
 
 	// A lost index and a fresh process state both rebuild from the authoritative snapshot.

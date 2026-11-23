@@ -49,7 +49,7 @@ func (e *Executor) invokeFunctionRhiza(ctx context.Context, principal string, ac
 	if routeID != "" && c.Causation.Source != "workflow" {
 		return Receipt{}, reject("forbidden", "workflow_route_id is reserved for Workflow invocations")
 	}
-	if _, _, err := e.requireCurrentParticipantRhiza(ctx, c.WorkspaceID, streamID, participant, "", routeID, false, &statements); err != nil {
+	if _, _, err := e.currentWorkRouteRhiza(ctx, c.WorkspaceID, streamID, participant, "", routeID, false, &statements); err != nil {
 		return Receipt{}, err
 	}
 	functionID, _ := payload["function_revision_id"].(string)

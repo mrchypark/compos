@@ -15,21 +15,13 @@ import (
 	"github.com/mrchypark/rhiza"
 )
 
-func TestGraphProjectionReconcileCannotHideANewerCommittedHead(t *testing.T) {
-	handler := &Server{graphProjectionHeads: map[string]int64{"w": 3}, graphProjectionCursors: map[string]int64{"w": 1}}
-	handler.finishGraphProjectionReconcile(map[string]int64{"w": 2}, map[string]int64{"w": 2}, nil)
-	if handler.graphProjectionHeads["w"] != 3 || handler.graphProjectionCursors["w"] != 2 {
-		t.Fatalf("heads=%v cursors=%v", handler.graphProjectionHeads, handler.graphProjectionCursors)
-	}
-}
-
 func TestHTTPWorkspaceRegistryAndCommandCompatibility(t *testing.T) {
 	s, err := store.Open(context.Background(), store.Options{Path: filepath.Join(t.TempDir(), "compos.sqlite")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	handler := New(s)
+	handler := newTestServer(s)
 	workspace := request(t, handler, "POST", "/api/v1/workspaces", map[string]any{"name": "One", "key": "one", "idempotency_key": "idem_workspace"})
 	if workspace.Code != http.StatusCreated {
 		t.Fatalf("workspace status=%d body=%s", workspace.Code, workspace.Body.String())
@@ -61,19 +53,15 @@ func TestHTTPWorkspaceRegistryAndCommandCompatibility(t *testing.T) {
 	if !bytes.Equal(firstAdapter.Body.Bytes(), secondAdapter.Body.Bytes()) {
 		t.Fatalf("idempotent adapter response changed: first=%s second=%s", firstAdapter.Body.String(), secondAdapter.Body.String())
 	}
-	var builtins int
-	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM object_types WHERE workspace_id=? AND key IN ('people','companies')`, workspaceID).Scan(&builtins); err != nil {
-		t.Fatal(err)
+	var types, revisions, definitions, objects, relations, slots, indexes, requests int
+	err = s.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM object_types WHERE workspace_id=?), (SELECT COUNT(*) FROM object_type_schema_revisions WHERE workspace_id=?), (SELECT COUNT(*) FROM relation_definitions WHERE workspace_id=?), (SELECT COUNT(*) FROM object_instances WHERE workspace_id=?), (SELECT COUNT(*) FROM object_relations WHERE workspace_id=?), (SELECT COUNT(*) FROM relation_cardinality_slots WHERE workspace_id=?), (SELECT COUNT(*) FROM object_field_index WHERE workspace_id=?), (SELECT COUNT(*) FROM workspace_creation_requests WHERE workspace_id=?)`, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID).Scan(&types, &revisions, &definitions, &objects, &relations, &slots, &indexes, &requests)
+	if err != nil || types != 0 || revisions != 0 || definitions != 0 || objects != 0 || relations != 0 || slots != 0 || indexes != 0 || requests != 1 {
+		t.Fatalf("workspace contents=%d,%d,%d,%d,%d,%d,%d,%d err=%v", types, revisions, definitions, objects, relations, slots, indexes, requests, err)
 	}
-	if builtins != 2 {
-		t.Fatalf("built-in object types=%d", builtins)
-	}
-	var worksFor int
-	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM relation_definitions WHERE workspace_id=? AND key='works_for'`, workspaceID).Scan(&worksFor); err != nil {
-		t.Fatal(err)
-	}
-	if worksFor != 1 {
-		t.Fatal("works_for was not provisioned")
+	for _, field := range []string{"workspace_company_object_instance_id", "works_for_relation_definition_id", "creator_person_object_instance_id", "works_for_object_relation_id"} {
+		if _, exists := createdData[field]; exists {
+			t.Fatalf("unexpected response field %q: %v", field, createdData)
+		}
 	}
 	registry := request(t, handler, "GET", "/api/v1/kernel/command-registry", nil)
 	if registry.Code != 200 {
@@ -89,6 +77,25 @@ func TestHTTPWorkspaceRegistryAndCommandCompatibility(t *testing.T) {
 	}
 	if !bytes.Contains(response.Body.Bytes(), []byte(`"outcome":"applied"`)) {
 		t.Fatal(response.Body.String())
+	}
+	var typeID string
+	if err := s.DB().QueryRow(`SELECT id FROM object_types WHERE workspace_id=? AND key='orders'`, workspaceID).Scan(&typeID); err != nil {
+		t.Fatal(err)
+	}
+	collection := "/api/v1/workspaces/" + workspaceID + "/object-types/" + typeID + "/objects"
+	createdObject := request(t, handler, http.MethodPost, collection, map[string]any{"title": "Order", "values": map[string]any{}, "idempotency_key": "order-create"})
+	if createdObject.Code != http.StatusOK || !bytes.Contains(createdObject.Body.Bytes(), []byte(`"outcome":"applied"`)) {
+		t.Fatalf("create object: %d %s", createdObject.Code, createdObject.Body.String())
+	}
+	var objectID string
+	if err := s.DB().QueryRow(`SELECT id FROM object_instances WHERE workspace_id=? AND object_type_id=?`, workspaceID, typeID).Scan(&objectID); err != nil {
+		t.Fatal(err)
+	}
+	read := request(t, handler, http.MethodGet, "/api/v1/workspaces/"+workspaceID+"/objects/"+objectID, nil)
+	updated := request(t, handler, http.MethodPatch, collection+"/"+objectID, map[string]any{"title": "Updated", "idempotency_key": "order-update", "expected_version": 1})
+	archived := request(t, handler, http.MethodDelete, collection+"/"+objectID, map[string]any{"idempotency_key": "order-delete", "expected_version": 2})
+	if read.Code != http.StatusOK || !bytes.Contains(read.Body.Bytes(), []byte(`"title":"Order"`)) || updated.Code != http.StatusOK || archived.Code != http.StatusOK {
+		t.Fatalf("object CRUD: read=%d %s update=%d %s delete=%d %s", read.Code, read.Body.String(), updated.Code, updated.Body.String(), archived.Code, archived.Body.String())
 	}
 	command["command_id"], command["idempotency_key"] = "cmd_2", "idem_2"
 	command["payload"] = map[string]any{"key": "invoices", "singular": "Invoice", "plural": "Invoices", "field_schema": map[string]any{"type": "object"}}
@@ -121,7 +128,7 @@ func TestRhizaWorkspaceCreationIsAtomicIdempotentAndConcurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	handler := New(s)
+	handler := newTestServer(s)
 	defer handler.Close()
 
 	created := request(t, handler, "POST", "/api/v1/workspaces", map[string]any{"name": "One", "key": "one", "idempotency_key": "idem_one"})
@@ -136,20 +143,18 @@ func TestRhizaWorkspaceCreationIsAtomicIdempotentAndConcurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspaceID := body["data"].(map[string]any)["id"].(string)
-	var memberships, types, revisions, definitions, objects, bindings, relations, slots, indexes, requests int
+	var types, revisions, definitions, objects, relations, slots, indexes, requests int
 	err = s.ReadRow(ctx, store.ReadLinearizable, `SELECT
-		(SELECT COUNT(*) FROM workspace_memberships WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM object_types WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM object_type_schema_revisions WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM relation_definitions WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM object_instances WHERE workspace_id=?),
-		(SELECT COUNT(*) FROM principal_person_bindings WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM object_relations WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM relation_cardinality_slots WHERE workspace_id=?),
 		(SELECT COUNT(*) FROM object_field_index WHERE workspace_id=?),
-		(SELECT COUNT(*) FROM workspace_creation_requests WHERE workspace_id=?)`, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID).Scan(&memberships, &types, &revisions, &definitions, &objects, &bindings, &relations, &slots, &indexes, &requests)
-	if err != nil || memberships != 1 || types != 2 || revisions != 2 || definitions != 1 || objects != 2 || bindings != 1 || relations != 1 || slots != 1 || indexes != 2 || requests != 1 {
-		t.Fatalf("builtins=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d err=%v", memberships, types, revisions, definitions, objects, bindings, relations, slots, indexes, requests, err)
+		(SELECT COUNT(*) FROM workspace_creation_requests WHERE workspace_id=?)`, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID, workspaceID).Scan(&types, &revisions, &definitions, &objects, &relations, &slots, &indexes, &requests)
+	if err != nil || types != 0 || revisions != 0 || definitions != 0 || objects != 0 || relations != 0 || slots != 0 || indexes != 0 || requests != 1 {
+		t.Fatalf("workspace contents=%d,%d,%d,%d,%d,%d,%d,%d err=%v", types, revisions, definitions, objects, relations, slots, indexes, requests, err)
 	}
 	commandResponse := request(t, handler, "POST", "/api/v1/kernel/commands", map[string]any{
 		"command_id": "cmd_workspace_rhiza", "idempotency_key": "idem_workspace_rhiza", "workspace_id": workspaceID,
@@ -186,12 +191,53 @@ func TestRhizaWorkspaceCreationIsAtomicIdempotentAndConcurrent(t *testing.T) {
 	if err := s.ReadRow(ctx, store.ReadLinearizable, `SELECT COUNT(*) FROM workspaces WHERE key='concurrent'`).Scan(&concurrentWorkspaces); err != nil || winners != 1 || conflicts != 7 || concurrentWorkspaces != 1 {
 		t.Fatalf("concurrent winners=%d conflicts=%d workspaces=%d err=%v", winners, conflicts, concurrentWorkspaces, err)
 	}
+
+	statuses = make(chan int, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			statuses <- request(t, handler, "POST", "/api/v1/workspaces", map[string]any{"name": "Same", "key": "same", "idempotency_key": "same"}).Code
+		}()
+	}
+	wg.Wait()
+	close(statuses)
+	winners, duplicates := 0, 0
+	for status := range statuses {
+		if status == http.StatusCreated {
+			winners++
+		} else if status == http.StatusOK {
+			duplicates++
+		}
+	}
+	var sameWorkspaces, sameRequests int
+	err = s.ReadRow(ctx, store.ReadLinearizable, `SELECT (SELECT COUNT(*) FROM workspaces WHERE key='same'), (SELECT COUNT(*) FROM workspace_creation_requests WHERE idempotency_key='same')`).Scan(&sameWorkspaces, &sameRequests)
+	if err != nil || winners != 1 || duplicates != 7 || sameWorkspaces != 1 || sameRequests != 1 {
+		t.Fatalf("concurrent idempotency winners=%d duplicates=%d workspaces=%d requests=%d err=%v", winners, duplicates, sameWorkspaces, sameRequests, err)
+	}
+}
+
+func TestWorkspaceCreationRollsBackOnRequestFailure(t *testing.T) {
+	s, err := store.Open(context.Background(), store.Options{Path: filepath.Join(t.TempDir(), "compos.sqlite")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB().Exec(`CREATE TRIGGER fail_workspace_request BEFORE INSERT ON workspace_creation_requests BEGIN SELECT RAISE(ABORT, 'test failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	handler := newTestServer(s)
+	defer handler.Close()
+	response := request(t, handler, http.MethodPost, "/api/v1/workspaces", map[string]any{"name": "Rollback", "key": "rollback", "idempotency_key": "rollback"})
+	var count int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM workspaces WHERE key='rollback'`).Scan(&count); err != nil || response.Code != http.StatusInternalServerError || count != 0 {
+		t.Fatalf("rollback status=%d workspaces=%d err=%v", response.Code, count, err)
+	}
 }
 
 func TestInternalObjectReadRouteIsNotExposed(t *testing.T) {
-	db, handler, workspace := authTestServer(t)
-	defer db.Close()
-	defer handler.Close()
+	_, handler, _ := newWorkflowTestRuntime(t)
+	workspace := "wks_1"
 
 	body := map[string]any{"namespace": workspace, "objectType": "orders", "schemaDigest": "ignored", "resourceId": "obj_1"}
 	if response := request(t, handler, http.MethodPost, "/internal/v1/objects:read", body); response.Code != http.StatusNotFound {
@@ -215,4 +261,45 @@ func request(t *testing.T, h http.Handler, method, path string, body any) *httpt
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
+}
+
+func TestExternalKnowledgeBoundary(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, store.Options{Path: filepath.Join(t.TempDir(), "legacy.sqlite")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	handler := newTestServer(db)
+	defer handler.Close()
+	response := request(t, handler, "POST", "/api/v1/workspaces", map[string]any{"name": "External", "key": "external", "idempotency_key": "external"})
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil || created.Data.ID == "" {
+		t.Fatalf("workspace: %s err=%v", response.Body.String(), err)
+	}
+	workspace := created.Data.ID
+	for _, path := range []string{"knowledge", "knowledge/core/legacy", "knowledge/proposals", "ontology/traverse", "ontology/reachable-node-ids", "ontology/groundings"} {
+		result := request(t, handler, "GET", "/api/v1/workspaces/"+workspace+"/"+path, nil)
+		if result.Code != http.StatusNotFound {
+			t.Fatalf("%s: status=%d body=%s", path, result.Code, result.Body.String())
+		}
+	}
+	health := request(t, handler, "GET", "/api/v1/health", nil)
+	if health.Code != 200 || bytes.Contains(health.Body.Bytes(), []byte("knowledge_projection")) {
+		t.Fatalf("health: %s", health.Body.String())
+	}
+	snapshot := request(t, handler, "GET", "/api/v1/workspaces/"+workspace+"/projection/snapshot", nil)
+	var body struct {
+		Snapshot map[string]any `json:"snapshot"`
+	}
+	if err := json.Unmarshal(snapshot.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := body.Snapshot["knowledge"]; exists || body.Snapshot["schema_version"] != float64(3) || body.Snapshot["data_hash"] != sha([]byte(canonical(map[string]any{"objects": body.Snapshot["objects"]}))) {
+		t.Fatalf("snapshot: %s", snapshot.Body.String())
+	}
 }

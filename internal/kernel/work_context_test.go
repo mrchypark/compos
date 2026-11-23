@@ -26,17 +26,15 @@ func TestWorkOpenValidatesBindingContextRoots(t *testing.T) {
 				if err := s.Exec(ctx, "work-context-fixture", `INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 					t.Fatal(err)
 				}
-				if err := s.Exec(ctx, "work-context-membership", `INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, "2026-01-01T00:00:00Z"); err != nil {
-					t.Fatal(err)
-				}
+
 			}
 			defer s.Close()
 
 			var e *Executor
 			if rhizaStore {
-				e = NewStoreExecutor(s)
+				e = testStoreExecutor(s)
 			} else {
-				e = NewExecutor(s.DB())
+				e = testExecutor(s.DB())
 			}
 			e.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
@@ -77,9 +75,7 @@ func TestWorkOpenValidatesBindingContextRoots(t *testing.T) {
 			if err := s.Exec(ctx, "context-other-workspace", `INSERT INTO workspaces VALUES('wks_other','other','Other',1,?,?)`, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 				t.Fatal(err)
 			}
-			if err := s.Exec(ctx, "context-other-membership", `INSERT INTO workspace_memberships VALUES('wks_other','dev','owner',?)`, "2026-01-01T00:00:00Z"); err != nil {
-				t.Fatal(err)
-			}
+
 			foreignType := command("context-foreign-type", "context-foreign-type", "object_type.define", "object_type", nil, map[string]any{"key": "customers", "singular": "Customer", "plural": "Customers", "field_schema": map[string]any{"type": "object", "additionalProperties": false}})
 			foreignType.WorkspaceID = "wks_other"
 			execute(t, e, "dev", foreignType)

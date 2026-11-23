@@ -23,10 +23,8 @@ func TestWorldSpecJournalPurchaseApproval(t *testing.T) {
 	if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-		t.Fatal(err)
-	}
-	executor := NewExecutor(s.DB())
+
+	executor := testExecutor(s.DB())
 	executor.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	typeReceipt := execute(t, executor, "dev", command("cmd_type", "idem_type", "object_type.define", "object_type", nil, map[string]any{
@@ -72,22 +70,22 @@ func TestWorldSpecJournalPurchaseApproval(t *testing.T) {
 	invoke.RequestedActor = &Actor{Type: "automation", ID: "auto-approve"}
 	invoke.Causation.Source = "automation"
 	invoke.Causation.Automation = json.RawMessage(`{"recursion_depth":0}`)
-	if _, err := executor.Execute(ctx, "dev", invoke); err == nil || err.(*CommandError).Outcome != "forbidden" {
-		t.Fatalf("route unexpectedly granted mutation authority: %v", err)
-	}
-	if _, err := s.DB().Exec(`INSERT INTO actor_capabilities(id,workspace_id,principal_id,actor_type,actor_id,command_type,causation_source,relation_definition_id,idempotency_key_prefix,max_automation_recursion_depth,created_at,updated_at) VALUES('cap_1','wks_1','dev','automation','auto-approve','function.invoke','automation','','auto:',2,?,?)`, now, now); err != nil {
-		t.Fatal(err)
-	}
 	badOutputInvoke := command("cmd_invoke_bad_output", "auto:invoke-bad-output", "function.invoke", "work_stream", &workID, map[string]any{"function_revision_id": mismatchedFunction.Aggregate.ID, "input": map[string]any{"object_id": objectID, "expected_version": 1}})
 	badOutputInvoke.RequestedActor, badOutputInvoke.Causation.Source, badOutputInvoke.Causation.Automation = &Actor{Type: "automation", ID: "auto-approve"}, "automation", json.RawMessage(`{"recursion_depth":0}`)
 	if _, err := executor.Execute(ctx, "dev", badOutputInvoke); err == nil {
 		t.Fatal("kernel Function output outside output_schema was committed")
 	}
-	invokeReceipt := execute(t, executor, "dev", invoke)
+	invokeReceipt, err := executor.Execute(ctx, "dev", invoke)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if invokeReceipt.Aggregate.ID != objectID || invokeReceipt.Aggregate.Version != 2 {
 		t.Fatalf("invoke aggregate=%+v", invokeReceipt.Aggregate)
 	}
-	duplicate := execute(t, executor, "dev", invoke)
+	duplicate, err := executor.Execute(ctx, "dev", invoke)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if duplicate.Outcome != "duplicate" {
 		t.Fatalf("duplicate outcome=%s", duplicate.Outcome)
 	}
@@ -145,7 +143,9 @@ func TestWorldSpecJournalPurchaseApproval(t *testing.T) {
 	invoke2.RequestedActor = &Actor{Type: "automation", ID: "auto-approve"}
 	invoke2.Causation.Source = "automation"
 	invoke2.Causation.Automation = json.RawMessage(`{"recursion_depth":0}`)
-	execute(t, executor, "dev", invoke2)
+	if _, err := executor.Execute(ctx, "dev", invoke2); err != nil {
+		t.Fatal(err)
+	}
 	var successes, satisfied int
 	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM journal_records WHERE stream_id=? AND kind='function.succeeded'`, secondWorkID).Scan(&successes); err != nil {
 		t.Fatal(err)
@@ -173,9 +173,7 @@ func TestKernelFunctionObjectUpdateUsesPinnedWorkObject(t *testing.T) {
 			if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-				t.Fatal(err)
-			}
+
 			return s
 		}},
 		{name: "rhiza", open: func(t *testing.T) *store.Store { return openRhizaKernelStore(t, ctx, "kernel-function-update") }},
@@ -184,7 +182,7 @@ func TestKernelFunctionObjectUpdateUsesPinnedWorkObject(t *testing.T) {
 		t.Run(backend.name, func(t *testing.T) {
 			s := backend.open(t)
 			defer s.Close()
-			executor := NewStoreExecutor(s)
+			executor := testStoreExecutor(s)
 			executor.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 			execute(t, executor, "dev", command("cmd_update_type", "idem_update_type", "object_type.define", "object_type", nil, map[string]any{
 				"key": "requests", "singular": "Request", "plural": "Requests",
@@ -242,10 +240,8 @@ func TestExternalFunctionBindingsEmitPinnedConductorRequests(t *testing.T) {
 	if _, err := s.DB().Exec(`INSERT INTO workspaces VALUES('wks_1','one','One',1,?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','dev','owner',?)`, now); err != nil {
-		t.Fatal(err)
-	}
-	executor := NewExecutor(s.DB())
+
+	executor := testExecutor(s.DB())
 	executor.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	execute(t, executor, "dev", command("cmd_type_external", "idem_type_external", "object_type.define", "object_type", nil, map[string]any{

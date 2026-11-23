@@ -64,7 +64,7 @@ func (e *Executor) workTaskRhiza(ctx context.Context, workspace, stream string, 
 	return taskID, contextValue, nil
 }
 
-func (e *Executor) requireCurrentParticipantRhiza(ctx context.Context, workspace, stream string, actor *Actor, requestedStepID, requestedRouteID string, unresolved bool, statements *[]rhiza.SQLStatement) (string, string, error) {
+func (e *Executor) currentWorkRouteRhiza(ctx context.Context, workspace, stream string, actor *Actor, requestedStepID, requestedRouteID string, unresolved bool, statements *[]rhiza.SQLStatement) (string, string, error) {
 	var recordID, kind, id, stepID, routeID string
 	var sequence int64
 	err := e.store.ReadRow(ctx, store.ReadLinearizable, `
@@ -224,7 +224,7 @@ func (e *Executor) submitWorkRhiza(ctx context.Context, principal string, actor 
 	if (requestedStepID == "") != (requestedRouteID == "") {
 		return Receipt{}, reject("schema_mismatch", "workflow_step_id and workflow_route_id must be provided together")
 	}
-	stepID, routeID, err := e.requireCurrentParticipantRhiza(ctx, c.WorkspaceID, streamID, participant, requestedStepID, requestedRouteID, true, &statements)
+	stepID, routeID, err := e.currentWorkRouteRhiza(ctx, c.WorkspaceID, streamID, participant, requestedStepID, requestedRouteID, true, &statements)
 	if err != nil {
 		return Receipt{}, err
 	}

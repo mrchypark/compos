@@ -61,16 +61,6 @@ stop_process() {
   fi
 }
 
-build_compos() {
-  (cd "$ROOT_DIR" && go build -o "$COMPOS_BIN" ./cmd/compos)
+build_server() {
   (cd "$ROOT_DIR" && go build -o "$SERVER_BIN" ./cmd/server)
-}
-
-write_none_session() {
-  session_path=$1
-  server_url=$2
-  workspace_id=${3:-wks_default}
-  mkdir -p "$(dirname "$session_path")"
-  printf '{"server":"%s","workspace_id":"%s","principal_id":"dev","credential":"","created_at":"1970-01-01T00:00:00Z"}\n' "$server_url" "$workspace_id" >"$session_path"
-  chmod 600 "$session_path"
 }

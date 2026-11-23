@@ -24,8 +24,10 @@ the Kernel executor instead of applying reducer or automation writes directly.
 ## ReactiveRule V1 Contract
 
 User-authored ReactiveRules are Definition Layer records. Creating or
-updating a rule is a creator-owned Kernel command. Dispatch runs under the
-rule creator's principal and records the automation actor in command causation.
+updating a rule uses Kernel commands. Dispatch passes the revision's stored
+creator principal and an automation actor as command context. These values do
+not authenticate a caller or grant permissions; the HTTP server uses the fixed
+principal `local`.
 
 The minimum v1 rule definition includes:
 
@@ -49,8 +51,8 @@ The minimum v1 rule definition includes:
 - `limits`
 
 On the wire, `requested_actor.type` must be `automation`, and
-`requested_actor.id` must match `automation_id`. Rule lifecycle commands must
-be issued by the rule creator.
+`requested_actor.id` must match `automation_id`. Rule lifecycle commands are not
+restricted to the rule creator.
 
 Rule revisions are immutable. Each revision has a new `rule_revision_id` and
 `definition_hash`. Evaluation records always reference the exact revision used.
@@ -68,7 +70,7 @@ trigger:
   event_type: object.created
   event_schema_version: 1
   aggregate_type: object_instance
-  allowed_causation_sources: [cli, api, automation, adapter_reducer]
+  allowed_causation_sources: [api, automation, adapter_reducer]
   excluded_automation_ids: [self]
 ```
 
@@ -77,9 +79,8 @@ excluding ReactiveRule lifecycle events, plus the scheduler-owned public
 `work.deadline.reached` SLA fact. Hidden reducers such as Function/Agent result
 recording and Workflow completion are not visible triggers. Rules must not
 subscribe to arbitrary internal, admin, quorum,
-credential, secret, or control-plane events. Event visibility is an
-authorization boundary: an evaluator must not expose fields the rule author or
-automation actor cannot observe.
+credential, secret, or control-plane events. Trigger filtering is not a
+per-user authorization or field-visibility boundary.
 
 ## Predicate Contract
 
@@ -133,7 +134,7 @@ action:
   preconditions_template: []
 ```
 
-The action command type must be allowlisted for the automation actor. Templates
+The action command type must be allowed by the command registry. Templates
 must not set `workspace_id`, `command_id`, `requested_actor`, `causation`, or
 idempotency namespace fields. Those fields are system-rendered.
 
@@ -147,10 +148,10 @@ Template values are literal JSON unless they use the closed reference form:
 `path` is a JSON Pointer. Missing template references fail validation instead
 of rendering `null` implicitly.
 
-V1 explicitly forbids automation actions that create, update, or delete
-ReactiveRules, grant/revoke capabilities, modify workspace membership,
-change adapter configuration, access secrets, or execute quorum/control-plane
-operations.
+V1 does not allow automation actions that create, update, or delete
+ReactiveRules, change adapter configuration, access secrets, or execute
+quorum/control-plane operations. Capability grants and workspace membership
+are not implemented permission controls.
 
 ## Idempotency Contract
 
@@ -281,7 +282,7 @@ events become:
 - observations
 - command intents
 
-Inbound adapter event endpoints require bearer authentication and workspace
+Inbound adapter event endpoints do not authenticate callers or check workspace
 membership before appending.
 
 Adapters must not write canonical rows directly.
@@ -295,5 +296,4 @@ Automations and adapters must not:
 
 - move objects directly
 - mutate relation rows directly
-- bypass Kernel authorization
 - bypass Kernel validation

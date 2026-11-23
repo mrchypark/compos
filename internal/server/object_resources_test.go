@@ -1,8 +1,6 @@
 package server
 
 import (
-	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,9 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/mrchypark/compos/internal/kernel"
-	"github.com/mrchypark/compos/internal/store"
 )
 
 func TestParseRecordScope(t *testing.T) {
@@ -62,7 +57,7 @@ func TestTypedObjectCatalogScopesBeforePagingAndPinsWorkspaceAndType(t *testing.
 	otherType := execute("cmd_scope_other_type", "object_type.define", "object_type", nil, map[string]any{"key": "other_items", "singular": "Other Item", "plural": "Other Items", "field_schema": map[string]any{"type": "object"}})
 	first := execute("cmd_scope_first", "object.create", "object_instance", nil, map[string]any{"object_type_key": "scope_items", "title": "Unselected first"})
 	allowed := execute("cmd_scope_allowed", "object.create", "object_instance", nil, map[string]any{"object_type_key": "scope_items", "title": "Authorized"})
-	token, principalID := typedObjectOIDCFixture(t, db, handler)
+	token := typedObjectAuthFixture(t, handler)
 	if _, err := db.DB().Exec(`UPDATE object_instances SET updated_at=? WHERE id=?`, "2999-01-01T00:00:00Z", first.Aggregate.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -85,9 +80,7 @@ func TestTypedObjectCatalogScopesBeforePagingAndPinsWorkspaceAndType(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_other',?,'member',?)`, principalID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		t.Fatal(err)
-	}
+
 	wrongWorkspace := authRequest(t, handler, http.MethodGet, "/api/v1/workspaces/wks_other/object-types/"+typeReceipt.Aggregate.ID+"/objects?filter="+url.QueryEscape(`(id = "`+allowed.Aggregate.ID+`")`), token, nil)
 	if wrongWorkspace.Code != http.StatusOK || !strings.Contains(wrongWorkspace.Body.String(), `"data":[]`) {
 		t.Fatalf("wrong workspace status=%d body=%s", wrongWorkspace.Code, wrongWorkspace.Body.String())
@@ -106,7 +99,7 @@ func TestTypedObjectCommandsPinIdentityAndRequireVersion(t *testing.T) {
 	db, handler, execute := newWorkflowTestRuntime(t)
 	typeReceipt := execute("cmd_typed_type", "object_type.define", "object_type", nil, map[string]any{"key": "typed_items", "singular": "Typed Item", "plural": "Typed Items", "field_schema": map[string]any{"type": "object"}})
 	otherType := execute("cmd_typed_other_type", "object_type.define", "object_type", nil, map[string]any{"key": "typed_other", "singular": "Typed Other", "plural": "Typed Others", "field_schema": map[string]any{"type": "object"}})
-	token, principalID := typedObjectOIDCFixture(t, db, handler)
+	token := typedObjectAuthFixture(t, handler)
 	collection := "/api/v1/workspaces/wks_1/object-types/" + typeReceipt.Aggregate.ID + "/objects"
 	duplicateCreate := authRequestRaw(t, handler, http.MethodPost, collection, token, `{"title":"First","TITLE":"Second","idempotency_key":"typed_duplicate_title"}`)
 	if duplicateCreate.Code != http.StatusBadRequest {
@@ -147,65 +140,30 @@ func TestTypedObjectCommandsPinIdentityAndRequireVersion(t *testing.T) {
 	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"version":2`) {
 		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
 	}
-	if _, err := db.DB().Exec(`DELETE FROM workspace_memberships WHERE workspace_id='wks_1' AND principal_id=?`, principalID); err != nil {
-		t.Fatal(err)
+
+	archive := authRequest(t, handler, http.MethodDelete, collection+row, token, map[string]any{"idempotency_key": "typed_archive", "expected_version": 2})
+	if archive.Code != http.StatusOK {
+		t.Fatalf("archive status=%d body=%s", archive.Code, archive.Body.String())
 	}
-	unauthorizedArchive := authRequest(t, handler, http.MethodDelete, collection+row, token, map[string]any{"idempotency_key": "typed_archive_denied", "expected_version": 2})
-	if unauthorizedArchive.Code != http.StatusForbidden {
-		t.Fatalf("unauthorized archive status=%d body=%s", unauthorizedArchive.Code, unauthorizedArchive.Body.String())
-	}
-	var archived sql.NullString
-	if err := db.DB().QueryRow(`SELECT archived_at FROM object_instances WHERE id=?`, objectID).Scan(&archived); err != nil || archived.Valid {
-		t.Fatalf("unauthorized archive changed row: archived=%v err=%v", archived, err)
+	var archived string
+	if err := db.DB().QueryRow(`SELECT archived_at FROM object_instances WHERE id=?`, objectID).Scan(&archived); err != nil || archived == "" {
+		t.Fatalf("archive did not change row: archived=%q err=%v", archived, err)
 	}
 }
 
-func authRequestRaw(t *testing.T, handler http.Handler, method, path, token, body string) *httptest.ResponseRecorder {
+func authRequestRaw(t *testing.T, handler http.Handler, method, path, _ string, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
 }
 
-func typedObjectOIDCFixture(t *testing.T, db *store.Store, handler *Server) (string, string) {
-	t.Helper()
-	const subject, token = "shared-subject", "synthetic-oidc-token"
-	var issuer string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/.well-known/openid-configuration":
-			_ = json.NewEncoder(w).Encode(map[string]string{"issuer": issuer, "introspection_endpoint": issuer + "/introspect", "userinfo_endpoint": issuer + "/userinfo"})
-		case "/introspect":
-			if _, _, ok := r.BasicAuth(); !ok || r.FormValue("token") != token {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": subject, "aud": []string{"https://compos.local.test"}, "scope": "openid compos.api", "exp": time.Now().Add(time.Hour).Unix(), "iss": issuer, "token_type": "Bearer"})
-		case "/userinfo":
-			_ = json.NewEncoder(w).Encode(map[string]string{"sub": subject})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(upstream.Close)
-	issuer = upstream.URL
-	if err := handler.ConfigureAuth(AuthConfig{Mode: AuthModeOAuth2, OAuth2Issuer: issuer, OAuth2Resource: "https://compos.local.test", OAuth2RequiredScope: "compos.api", OAuth2ClientID: "compos-test", OAuth2ClientSecret: "synthetic-secret"}); err != nil {
-		t.Fatal(err)
-	}
-	principalID := providerID("rpr_", "compos:rauthy-principal:v1", issuer, subject)
-	if err := db.Exec(t.Context(), "typed-object-oidc-membership", `UPDATE workspace_memberships SET principal_id=? WHERE workspace_id='wks_1' AND principal_id='dev'`, principalID); err != nil {
-		t.Fatal(err)
-	}
-	return token, principalID
-}
-
 func TestTypedObjectCommandReplays(t *testing.T) {
 	db, handler, execute := newWorkflowTestRuntime(t)
 	typ := execute("cmd_replay_type", "object_type.define", "object_type", nil, map[string]any{"key": "replay_items", "singular": "Item", "plural": "Items", "field_schema": map[string]any{"type": "object"}})
-	token, principalID := typedObjectOIDCFixture(t, db, handler)
+	token := typedObjectAuthFixture(t, handler)
 	collection := "/api/v1/workspaces/wks_1/object-types/" + typ.Aggregate.ID + "/objects"
 	// Capture durable effects as well as the row: a duplicate must append nothing.
 	snapshot := func() string {
@@ -308,46 +266,12 @@ func TestTypedObjectCommandReplays(t *testing.T) {
 	if fresh.Code != http.StatusConflict {
 		t.Fatalf("fresh archive of archived row status=%d body=%s", fresh.Code, fresh.Body.String())
 	}
-	if _, err := db.DB().Exec(`DELETE FROM workspace_memberships WHERE workspace_id='wks_1' AND principal_id=?`, principalID); err != nil {
-		t.Fatal(err)
-	}
-	denied := authRequest(t, handler, http.MethodDelete, collection+"/"+objectID, token, map[string]any{"expected_version": 2, "idempotency_key": "replay_archive"})
-	if denied.Code != http.StatusForbidden {
-		t.Fatalf("revoked membership replay status=%d body=%s", denied.Code, denied.Body.String())
+
+	replay := authRequest(t, handler, http.MethodDelete, collection+"/"+objectID, token, map[string]any{"expected_version": 2, "idempotency_key": "replay_archive"})
+	if replay.Code != http.StatusOK || !strings.Contains(replay.Body.String(), `"outcome":"duplicate"`) {
+		t.Fatalf("archive replay status=%d body=%s", replay.Code, replay.Body.String())
 	}
 	if after := snapshot(); after != before {
-		t.Fatalf("denied replay mutated state: before=%s after=%s", before, after)
-	}
-}
-
-func TestTypedObjectCommandIDsIsolateLedgerScopes(t *testing.T) {
-	db, handler, execute := newWorkflowTestRuntime(t)
-	execute("cmd_scope_replay_type", "object_type.define", "object_type", nil, map[string]any{"key": "id_scopes", "singular": "Item", "plural": "Items", "field_schema": map[string]any{"type": "object"}})
-	if _, err := db.DB().Exec(`INSERT INTO workspace_memberships VALUES('wks_1','other','member','2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatal(err)
-	}
-	ids := map[string]bool{}
-	for _, actor := range []string{"dev", "other"} {
-		request := httptest.NewRequest(http.MethodPost, "/", nil)
-		request = request.WithContext(context.WithValue(request.Context(), principalContextKey{}, actor))
-		response := httptest.NewRecorder()
-		handler.executeTypedObjectCommand(response, request, kernel.Command{WorkspaceID: "wks_1", IdempotencyKey: "shared-key", CommandType: "object.create", Target: kernel.Target{AggregateType: "object_instance"}, Preconditions: []kernel.Precondition{}, Payload: json.RawMessage(`{"object_type_key":"id_scopes","title":"Scoped"}`), Causation: kernel.Causation{Source: "api"}})
-		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"outcome":"applied"`) {
-			t.Fatalf("principal=%s status=%d body=%s", actor, response.Code, response.Body.String())
-		}
-		var receipt struct {
-			CommandID string `json:"command_id"`
-		}
-		if err := json.Unmarshal(response.Body.Bytes(), &receipt); err != nil {
-			t.Fatal(err)
-		}
-		if receipt.CommandID == "" || ids[receipt.CommandID] {
-			t.Fatalf("principal command ID collision: %q", receipt.CommandID)
-		}
-		ids[receipt.CommandID] = true
-	}
-	var count int
-	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM object_instances WHERE title='Scoped'`).Scan(&count); err != nil || count != 2 {
-		t.Fatalf("isolated objects=%d err=%v", count, err)
+		t.Fatalf("replay mutated state: before=%s after=%s", before, after)
 	}
 }

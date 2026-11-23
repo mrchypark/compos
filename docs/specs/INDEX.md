@@ -17,19 +17,12 @@ Read in this order:
 7. [command-registry.md](command-registry.md)
 8. [canonical-storage-schema.md](canonical-storage-schema.md)
 9. [api-surface.md](api-surface.md)
-10. [authz-principal-actor-contract.md](authz-principal-actor-contract.md)
-11. [reactive-rule-adapter-boundary.md](reactive-rule-adapter-boundary.md)
-12. [go-cli-ledger.md](go-cli-ledger.md)
-13. [storage-ddl.md](storage-ddl.md)
-14. [http-api-contract.md](http-api-contract.md)
+10. [reactive-rule-adapter-boundary.md](reactive-rule-adapter-boundary.md)
+11. [storage-ddl.md](storage-ddl.md)
+12. [http-api-contract.md](http-api-contract.md)
 
-Implementation sequencing is tracked in the
-[Constitutional Architecture Implementation Plan](../plans/constitutional-architecture-implementation.md).
-Knowledge Space, Ontology grounding and the embedded Rhiza graph projection follow
-the [Knowledge Space and Ontology Implementation Plan](../plans/knowledge-ontology-implementation.md).
+Knowledge content and lifecycle are externally owned. Generic Ontology specs remain supported.
 
-Current findings and verification gates are tracked in the
-[implementation issue ledger](../plans/implementation-issues-20260905.md).
 The [S2 removal decision](../adr/0004-s2-and-rhiza-boundaries.md) records why the
 remote audit feature was removed while local audit and runtime delivery remain.
 
@@ -50,6 +43,5 @@ command intent -> Go Kernel validation -> canonical SQL commit
 
 No journal, adapter, automation, board, S2 stream, or external quorum service may
 bypass the Kernel to mutate business state. Rhiza executes the Kernel's validated
-canonical SQL commits. The checked-in runtime is on a feature branch;
-the tg900 one-node Rhiza deployment demonstrates GCS-backed recovery durability,
-not a merged or multi-node HA release.
+canonical SQL commits. Single-node object-storage recovery does not establish
+multi-node HA.

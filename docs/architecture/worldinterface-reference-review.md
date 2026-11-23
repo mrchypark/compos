@@ -53,7 +53,7 @@ FlowSpec
 
 주요 근거는
 [FlowSpec](https://github.com/zed-colonel/worldinterface/tree/f48df82e98203fa94c86eecae60425205c3e00e9/crates/worldinterface-core/src/flowspec),
-[deterministic IDs](https://github.com/zed-colonel/worldinterface/blob/f48df82e98203fa94c86eecae60425205c3e00e9/crates/worldinterface-core/src/flowspec/id.rs),
+[deterministic IDs](https://github.com/zed-colonel/worldinterface/blob/f48df82e98203fa94c86eecae60425205c3e00e9/crates/worldinterface-flowspec/src/id.rs),
 [ContextStore](https://github.com/zed-colonel/worldinterface/tree/f48df82e98203fa94c86eecae60425205c3e00e9/crates/worldinterface-contextstore/src),
 [connector contract](https://github.com/zed-colonel/worldinterface/blob/f48df82e98203fa94c86eecae60425205c3e00e9/crates/worldinterface-connector/src/traits.rs),
 [receipt](https://github.com/zed-colonel/worldinterface/blob/f48df82e98203fa94c86eecae60425205c3e00e9/crates/worldinterface-core/src/receipt.rs),

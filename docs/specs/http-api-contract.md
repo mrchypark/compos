@@ -10,8 +10,8 @@ GET /api/v1/workspaces/{workspace_id}/work
 GET /api/v1/workspaces/{workspace_id}/work/{stream_id}
 ```
 
-The collection route is the authenticated principal's Human inbox. It returns
-open `work.routed` facts targeting that human, excluding terminal work and a
+The collection route lists open `work.routed` facts for all human participants,
+including their actual participant IDs, excluding terminal work and a
 route after its matching submission. Workflow routes carry the semantic
 `workflow_step_id` and invocation-scoped `workflow_route_id`; parallel or repeated
 Workflow invocations remain separate inbox entries and `work.submit` must preserve
@@ -47,7 +47,7 @@ There are no generic timer/message/wait nodes.
 
 `SpecRevision(kind=participant)` stores an AgentDefinition. Routing to its pinned
 revision appends `agent.requested` and a Conductor outbox request. A successful
-authenticated callback appends `agent.succeeded` and `work.submitted`; a valid
+callback appends `agent.succeeded` and `work.submitted`; a valid
 `submission_valid` result also satisfies ordinary Work. Human and Agent workflow
 routes remain open until the submission carrying the same `workflow_step_id` and
 `workflow_route_id`;
@@ -56,7 +56,7 @@ performs final Work completion. Function nodes remain open until
 `function.succeeded` or `function.failed`. Publishing a Function or Workflow
 rejects any reachable composite Function↔Workflow execution cycle.
 
-## Backoffice business processing
+## Definition and relation reads
 
 ```text
 GET /api/v1/workspaces/{workspace_id}/definitions
@@ -70,19 +70,24 @@ The collection accepts `kind`, `family_id`, `limit` (1–100), and `offset`;
 `spec.publish`; existing Work stays pinned. Relation reads accept `direction`
 (`incoming`, `outgoing`, default `both`), `relation_definition_id`, `limit`, and
 `offset`. They return actual edge IDs/versions, endpoint IDs, and related record
-summaries. These authenticated workspace reads are canonical local reads, not
+summaries. These workspace reads are canonical local reads, not
 Meilisearch or Graph projections.
 
+The following binding and submission examples assume a configured workspace
+with the referenced object types, schemas, relations, and Task definitions.
+New workspaces start empty; define object types with `object_type.define` and
+define any required relations before creating objects or publishing bindings.
+
 Task `data_bindings` is an optional list of at most 32 semantic record bindings.
-UI layout, widgets and form drafts remain Backoffice-owned. Each binding has:
+UI layout, widgets and form drafts remain client-owned. Each binding has:
 
 ```json
 {
-  "id": "quote",
-  "object_type_id": "<quote-type-id>",
+  "id": "record",
+  "object_type_id": "<record-type-id>",
   "schema_version": 2,
   "context_key": "object_id",
-  "writable_fields": ["amount"],
+  "writable_fields": ["description"],
   "allow_title": true,
   "allowed_operations": ["object.update"]
 }
@@ -107,8 +112,8 @@ the Task binding scope. The Kernel resolves the contract from the immutable
 Workflow revision and invocation-scoped route ID, never a client-supplied schema.
 Human and Agent submitted values populate `steps.<step_id>` and `current`;
 route `output_mapping` follows the same selector rules as invoke steps. A human
-handoff continues under the authenticated submitter recorded in the Journal,
-with membership, Function capability and pinned object checks still enforced.
+handoff continues under the submitter recorded in the Journal. Work participant,
+Function binding and pinned object checks remain domain preconditions.
 
 `work.submit` without `changes` still records a submission only. Optional
 `changes` is a nonempty list of at most 32 bounded operations:
@@ -119,11 +124,11 @@ with membership, Function capability and pinned object checks still enforced.
   "workflow_step_id": "review",
   "workflow_route_id": "<route-id-from-inbox>",
   "changes": [{
-    "binding_id": "quote",
+    "binding_id": "record",
     "command_type": "object.update",
-    "target": {"aggregate_type": "object_instance", "aggregate_id": "<quote-id>"},
-    "preconditions": [{"aggregate_type": "object_instance", "aggregate_id": "<quote-id>", "expected_version": 1}],
-    "payload": {"values": {"amount": 120}}
+    "target": {"aggregate_type": "object_instance", "aggregate_id": "<record-id>"},
+    "preconditions": [{"aggregate_type": "object_instance", "aggregate_id": "<record-id>", "expected_version": 1}],
+    "payload": {"values": {"description": "Reviewed"}}
   }]
 }
 ```
@@ -158,7 +163,7 @@ transaction boundary, not client-side sequential saves disguised as one submit.
 ### Submission-local references and automatic numbers
 
 Each new `object.create` may carry a unique `client_ref` (a bounded Workflow-style
-identifier). A reference is the singleton JSON object `{"client_ref":"quote"}`;
+identifier). A reference is the singleton JSON object `{"client_ref":"parent"}`;
 plain strings remain existing server IDs. References are accepted in create
 `relations`, `relation.link` endpoint fields and the `submission` value. They are
 resolved only within this request; unknown, duplicate, malformed and cyclic
@@ -168,20 +173,20 @@ index before validation; the server orders dependent creates and preserves the
 original index in errors. New link endpoints have server-known version 1; existing
 endpoint/definition preconditions still follow the ordinary command contract.
 
-For example, an existing customer is pinned in Work `context.customer_id`. The
-`quote` binding traverses incoming `quote.customer`; the `item` binding traverses
-incoming `quote.customer` then incoming `item.quote`. Both permit `object.create`
+For example, an existing root record is pinned in Work `context.root_id`. The
+`parent` binding traverses incoming `parent.root`; the `item` binding traverses
+incoming `parent.root` then incoming `item.parent`. Both permit `object.create`
 and `allow_title`. Schemas supply generated number fields, which are omitted from
 the request. A payload fragment is:
 
 ```json
 {
-  "submission": {"quote_id": {"client_ref": "q"}},
+  "submission": {"parent_id": {"client_ref": "p"}},
   "changes": [
-    {"binding_id":"item","client_ref":"i1","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 1","values":{},"relations":{"quote":{"client_ref":"q"}}}},
-    {"binding_id":"quote","client_ref":"q","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"quotes","title":"Quote","values":{},"relations":{"customer":"<existing-customer-id>"}}},
-    {"binding_id":"item","client_ref":"i2","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 2","values":{},"relations":{"quote":{"client_ref":"q"}}}},
-    {"binding_id":"item","client_ref":"i3","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 3","values":{},"relations":{"quote":{"client_ref":"q"}}}}
+    {"binding_id":"item","client_ref":"i1","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 1","values":{},"relations":{"parent":{"client_ref":"p"}}}},
+    {"binding_id":"parent","client_ref":"p","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"parents","title":"Parent","values":{},"relations":{"root":"<existing-root-id>"}}},
+    {"binding_id":"item","client_ref":"i2","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 2","values":{},"relations":{"parent":{"client_ref":"p"}}}},
+    {"binding_id":"item","client_ref":"i3","command_type":"object.create","target":{"aggregate_type":"object_instance"},"payload":{"object_type_key":"items","title":"Item 3","values":{},"relations":{"parent":{"client_ref":"p"}}}}
   ]
 }
 ```
@@ -198,11 +203,11 @@ returns the persisted mapping rather than allocating again.
 The success receipt adds `client_refs`, persisted in the parent command ledger:
 
 ```json
-{"client_refs":{"q":{"id":"<assigned-id>","version":1,"generated_values":{"number":"Q-001"}},"i1":{"id":"<assigned-id>","version":1,"generated_values":{"number":"I-001"}}}}
+{"client_refs":{"p":{"id":"<assigned-id>","version":1,"generated_values":{"number":"P-001"}},"i1":{"id":"<assigned-id>","version":1,"generated_values":{"number":"I-001"}}}}
 ```
 
 The Journal contains the resolved submission, so the next Workflow step receives
-actual IDs. Backoffice replaces draft IDs/numbers only after a successful receipt.
+actual IDs. Clients replace draft IDs/numbers only after a successful receipt.
 On an uncertain network result it retries the exact same command. On rejection it
 keeps all drafts. Per-change validation errors add `error.details` with
 `change_index` (zero-based original order), `client_ref`, `binding_id`, `field`
@@ -227,202 +232,32 @@ Breaking request/response changes require a new API version.
 
 ## Authentication
 
-The optional `COMPOS_AUTH_MODE=oauth2` mode accepts an IdP access token directly
-and revalidates it through discovered RFC 7662 introspection plus OIDC UserInfo.
-It requires `openid` and a separate configured application scope (e.g.
-`compos.api`), preserves workspace authorization, and issues no Compos session.
-See [OAuth2 resource-server contract](oauth2-resource-server.md) for configuration,
-identity registration, client registration prerequisites, errors and limitations.
+Compos has no authentication, session, or authorization mode. Every registered
+HTTP route accepts credential-free requests and records the fixed principal
+`local`. Access restriction and caller authentication belong to the deployment
+network boundary. No `/api/v1/auth/*`, membership, or capability endpoints exist.
 
-Clients authenticate with:
+## Idempotency keys
 
-```text
-Authorization: Bearer <credential>
-```
-
-In the default `rauthy` mode, the credential is an opaque Compos session token
-issued after the Rauthy access-token exchange below. The API server hashes the
-bearer credential, resolves it through `auth_sessions`, and derives
-`authenticated_principal` from the stored session. Clients never send
-`authenticated_principal`. The Go CLI reads this credential from its login
-session; it does not expose per-command `--token` flags.
-
-`COMPOS_AUTH_MODE=none` is an explicit private/local development mode. It has
-no auth routes and treats requests as the deterministic `dev` principal. Each
-command is scoped to its submitted workspace without relying on a persisted
-`dev` membership. It must not be used for a public deployment.
-
-Workspaces, principals, provider identities, sessions, and memberships remain
-control-plane authority. Every human represented in workspace data is a
-person created through `object.create` with the built-in dynamic `people`
-object type, whose singular name is `person`. A dedicated control-plane
-principal-person binding connects a principal to one person in a workspace; it
-is not a generic object relation because a principal is not an
-`object_instance`. Person objects, principal-person bindings, and ordinary
-person-to-business relations do not authorize roles, memberships,
-capabilities, business operations, or sessions. Each workspace also has a
-reserved `companies` object type, deterministic own workspace company object,
-and reserved
-`works_for` relation definition from `people` to `companies`. There is no
-`employment` object, table, or Kernel aggregate.
-
-## Rauthy Login
-
-The default CLI login path exchanges a current Rauthy access token:
-
-```text
-POST /api/v1/auth/rauthy
-Content-Type: application/json
-```
-
-Request:
-
-```json
-{
-  "access_token": "upstream-access-token",
-  "workspace_id": "wks_..."
-}
-```
-
-`workspace_id` is optional. If omitted, the configured automatic-enrollment
-workspace is used; otherwise exactly one existing membership must be available.
-The server POSTs the token to Rauthy's introspection endpoint using the
-configured client credentials and requires `active: true`, the configured
-audience (string or array), required scope, a current `nbf`, and a future
-`exp`. It then reads userinfo and requires its `sub` to equal introspection's
-`sub`. The principal is deterministically derived from issuer and subject.
-Userinfo must supply a nonempty ASCII email with `email_verified: true`, and
-its complete domain must exactly match `COMPOS_AUTH_ALLOWED_EMAIL_DOMAINS`.
-
-Successful response:
-
-```json
-{
-  "data": {
-    "principal_id": "rpr_...",
-    "person_id": "obj_...",
-    "email": "user@example.com",
-    "name": "Example User",
-    "workspace_id": "wks_...",
-    "workspace_memberships": ["wks_..."],
-    "session": { "token": "csn_...", "expires_at": "4102444800" }
-  }
-}
-```
-
-The session expiry is the earlier of the Rauthy token `exp` and the Compos
-session TTL. Invalid/missing tokens, inactive claims, wrong audience/scope,
-expired/not-yet-valid claims, or mismatched userinfo subject return the normal
-`401 unauthenticated` envelope. Unavailable or malformed upstream responses
-return `502` for an invalid success or `503` for timeout/5xx. A requested workspace without membership is `403`; automatic
-enrollment is permitted only for the configured fixed workspace and fails if it
-does not exist.
-
-## PocketBase Login
-
-```text
-POST /api/v1/auth/pocketbase
-Content-Type: application/json
-```
-
-The closed request is `{"token":"opaque-token","workspace_id":"wks_..."}`;
-`workspace_id` is optional. Compos posts to
-`{COMPOS_POCKETBASE_URL}/api/collections/{COMPOS_POCKETBASE_AUTH_COLLECTION}/auth-refresh`
-with the raw token in `Authorization` (without a `Bearer` prefix), follows no
-redirects, and requires a successful response containing a refreshed token and
-a record with nonempty `id` and ASCII `email` plus `verified: true`. Only the
-refreshed token's future numeric `exp` is read, solely to cap the opaque Compos
-session; its identity claims and all client-token claims are ignored. Identity
-and principal keys are deterministic and collision-separated by canonical
-PocketBase origin, collection, and record ID.
-
-`COMPOS_POCKETBASE_URL` accepts canonical `http://` and `https://` base URLs.
-With `http://`, the raw bearer token has no transport encryption; the operator's
-deployment and network boundary are responsible for confidentiality. There is
-no separate allow-insecure flag for this explicit upstream URL choice.
-
-## Person Binding And Session Issuance
-
-After provider verification and workspace selection, human login resolves the
-workspace's principal-person binding before inserting the session:
-
-- The auth control plane requires exactly one binding for the authenticated
-  principal in the selected workspace. If it already exists, either provider
-  exchange reuses it.
-- If no binding exists, the authenticated provider request creates a new built-in
-  `person` instance through the standard `object.create` command path, then
-  creates the dedicated control-plane binding. The request has no `person_id`
-  selection field. A person may remain unbound if binding or later session
-  insertion does not complete.
-- The verified email claim is accepted only when Rauthy userinfo has
-  `email_verified: true` or the PocketBase record has `verified: true`;
-  phone claims are unsupported. Any future internal controlled flow that
-  binds an existing person must require an exact match against an immutable,
-  trusted verified claim; similarity, display-name matching, mutable payload
-  edits, and inferred identity are insufficient.
-- Person objects link to business objects through ordinary relation definitions
-  and `relation.link` / `relation.unlink`. Those relations are separate from the
-  principal-person binding. The built-in `works_for` relation links a `person`
-  object to a `company` object as an ordinary object relation; it is not an
-  employment aggregate and has no auth meaning.
-- Person objects, generic relations, and the principal-person binding grant no
-  authentication or authorization. Workspace membership and other principal
-  control-plane checks still govern session and command access.
-- No auth session is returned unless the selected workspace has exactly one
-  valid principal-person binding for the authenticated principal. Previously
-  issued sessions remain unchanged until expiry or revocation.
-- Once created, the principal-person binding is immutable in V1. It is outside
-  the person object's payload and cannot be changed with `object.update` or
-  generic relation commands.
-- Login does not create `works_for` rows. Later principals who become workspace
-  members and log in receive only the required person/binding path for session
-  issuance unless another explicit relation command links them to a company.
-
-```text
-GET /api/v1/auth/session
-Authorization: Bearer <session_token>
-
-POST /api/v1/auth/logout
-Authorization: Bearer <session_token>
-```
-
-`GET /api/v1/auth/session` returns the principal and its current workspace
-memberships. `POST /api/v1/auth/logout` revokes the presented session and
-returns `{"data":{"status":"logged_out"}}`; the same token is then rejected in
-legacy `rauthy`/`pocketbase` modes. In `oauth2` mode, session inspection uses the
-IdP bearer and logout returns `405` because token/session lifecycle belongs to
-the RP and IdP, not a local Compos session.
-
-| Mode | Auth routes |
-| --- | --- |
-| `rauthy` (default) | `POST /api/v1/auth/rauthy`, `GET /api/v1/auth/session`, `POST /api/v1/auth/logout` |
-| `pocketbase` | `POST /api/v1/auth/pocketbase`, `GET /api/v1/auth/session`, `POST /api/v1/auth/logout` |
-| `oauth2` | `POST /api/v1/auth/identity` (identity only; no membership/session), `GET /api/v1/auth/session`; logout returns `405` |
-| `none` | No `/api/v1/auth/*` routes (they return `404`); requests use `dev` locally |
-
-Administrative control-plane endpoints additionally require the authenticated
-principal to be configured in `COMPOS_ADMIN_PRINCIPALS`, or a bearer token that
-matches `COMPOS_ADMIN_BEARER_TOKEN` for cluster operator Jobs.
+Clients must generate a unique idempotency key for each intended operation and
+reuse that key when retrying the same operation. Because every caller uses the
+`local` principal, workspace creation keys share one namespace across all
+callers, and Kernel command keys share a namespace across all callers within
+each workspace. Workspace creation and Kernel commands use separate namespaces.
 
 ## Workspace Create
 
 ```text
 POST /api/v1/workspaces
-Authorization: Bearer <session_token>
 Content-Type: application/json
 ```
 
 This is a control-plane provisioning endpoint, not a Kernel command and not an
-entry in `GET /api/v1/kernel/command-registry`. The Go CLI exposes it as:
+entry in `GET /api/v1/kernel/command-registry`.
 
-```sh
-compos workspace create [--server URL] --name NAME [--key KEY] [--idempotency-key KEY]
-```
-
-The server derives `creator_principal_id` from the bearer session. The HTTP API requires
-`idempotency_key`; the CLI generates one when the flag is omitted. When `key` is
-provided, the CLI and server trim it and ASCII-lowercase it before deterministic
-idempotency hashing, request hashing, and storage.
+The server records fixed principal `local` as `creator_principal_id`. The HTTP
+API requires `idempotency_key`. When `key` is provided, the server trims and
+ASCII-lowercases it before deterministic request hashing and storage.
 
 Request:
 
@@ -437,14 +272,12 @@ Request:
 `key` is optional. Workspace creation atomically provisions:
 
 - the `workspaces` row;
-- an owner `workspace_memberships` row for the creator principal;
-- the reserved `people` and `companies` object types for the workspace;
-- the deterministic own workspace company object;
-- the creator `person` object;
-- the dedicated principal-person binding for the creator;
-- one ordinary `works_for` object relation from the creator person to the own
-  workspace company;
 - the idempotency/provisioning record.
+
+The new workspace has no domain object types, objects, or relation definitions.
+Before creating an object, define its type with `object_type.define`; see the
+[Kernel command contract](kernel-command-contract.md#payload-schema)
+for the definition payload.
 
 Repeating the same request with the same scoped idempotency key returns the
 stored result with duplicate status. Reusing the idempotency key with different
@@ -462,12 +295,7 @@ idempotent duplicate:
     "key": "acme-research",
     "name": "Acme Research",
     "version": 1,
-    "creator_principal_id": "gpr_...",
-    "owner_principal_id": "gpr_...",
-    "creator_person_object_instance_id": "obj_creator_wks_...",
-    "workspace_company_object_instance_id": "obj_company_wks_...",
-    "works_for_relation_definition_id": "rdf_builtin_works_for_wks_...",
-    "works_for_object_relation_id": "rel_creator_company_wks_...",
+    "creator_principal_id": "local",
     "created_at": "2026-09-01T00:00:00Z",
     "created": true,
     "status": "created"
@@ -485,14 +313,12 @@ POST /api/v1/kernel/commands
 Content-Type: application/json
 ```
 
-This endpoint is the Kernel execution boundary for trusted API callers. Go CLI write commands must not submit here before local
-durability; they append to the embedded local request ledger, then submit to the
-Compos server. Embedded Rhiza owns HA replication and recovery; the server does
-not expose command-log repair or confirmed-replay endpoints.
+This endpoint is the Kernel execution boundary for API callers. Embedded Rhiza
+owns HA replication and recovery; the server does not expose command-log repair
+or confirmed-replay endpoints.
 
-The Go SQLite support mode accepts an 8 MiB JSON command envelope. A decoded
-OKF `source_markdown` remains limited to 1 MiB; the larger envelope allows the
-full valid source size even when JSON escaping expands it.
+The Go SQLite support mode accepts an 8 MiB JSON command envelope. The example
+assumes `contracts` has already been defined in this workspace.
 
 Request:
 
@@ -517,8 +343,8 @@ Request:
     "values": {}
   },
   "causation": {
-    "source": "cli",
-    "attempt_id": "attempt_...",
+    "source": "api",
+    "attempt_id": null,
     "event_id": null
   }
 }
@@ -526,7 +352,8 @@ Request:
 
 ## Update Object
 
-`object.update` updates a normal object instance, including a `person`. The
+`object.update` updates an object instance. The example assumes a configured
+person type whose schema includes `display_name` and `email`. The
 command targets the object id and requires exactly one matching
 `object_instance` precondition with the current version. Its payload contains
 `title`, `values`, or both:
@@ -565,16 +392,12 @@ values and their existing schema pin.
 
 Object id, object type, workspace, and creation metadata are immutable system
 fields outside the payload. State is also outside this command and changes only
-through `object.move`. The dedicated principal-person binding is control-plane
-data outside the person object and cannot be changed by `object.update`.
-Existing-person login selection uses immutable `person_binding_claims`; changing
-a person's mutable `values.email` with `object.update` does not rewrite the
-binding claim snapshot.
+through `object.move`.
 
 ## Evolve Object Type Schema
 
 `object_type.schema_evolve` publishes a complete immutable field-schema snapshot.
-It targets one active, non-built-in `object_type` and requires that type's current
+It targets one active `object_type` and requires that type's current
 aggregate version as its CAS precondition. The payload is:
 
 ```json
@@ -601,21 +424,21 @@ pins the latest revision.
 
 ### Storage baseline
 
-This release supports only fresh databases carrying the canonical
-`compos-go-sqlite-world-spec-journal-reactive-agent-v3` identity. Existing databases without that identity must be
-recreated; there is no rolling migration or compatibility mode.
+Fresh databases carry the canonical
+`compos-go-sqlite-world-spec-journal-reactive-agent-v4` identity. Existing v3
+databases migrate atomically on open by dropping only `ontology_groundings`,
+`knowledge_relations` and `knowledge_documents`, including their contents, then
+publishing v4. Shared specs and history remain. Other identities are rejected;
+this is not mixed-version writer compatibility.
 
 ## Command Recovery Boundary
 
 The server has no S2 command-log, repair, manual quorum-control, or
-confirmed-replay HTTP surface. Ambiguous CLI submissions are retried from the
-local request ledger with the original command ID, idempotency key, and attempt ID.
-`ledger list` is local-only metadata inspection. Retry requires the original
-server, authenticated principal and workspace. Invalid or mismatched receipts
-remain outcome-unknown; only validated command receipts confirm commitment.
-Remote S2 audit synchronization has been removed from the CLI. Local retry still
-enters only through the Kernel command endpoint. Embedded Rhiza owns cluster
-checkpoint bootstrap, replicated logs, and recovery.
+confirmed-replay HTTP surface. An ambiguous API submission is retried with the
+original command ID, idempotency key, principal and workspace. Invalid or
+mismatched receipts remain outcome-unknown; only validated command receipts
+confirm commitment. Embedded Rhiza owns cluster checkpoint bootstrap,
+replicated logs, and recovery.
 
 ## Error Shape
 
@@ -642,7 +465,6 @@ All non-2xx responses use this envelope:
 HTTP mapping:
 
 - `400 validation_failed`
-- `401 unauthenticated`
 - `403 forbidden`
 - `404 not_found`
 - `409 precondition_failed`
@@ -658,7 +480,7 @@ HTTP mapping:
 GET /api/v1/workspaces/{workspace_id}/objects/{object_id}
 ```
 
-Response:
+Response from an example workspace where `contracts` has been defined:
 
 ```json
 {
@@ -776,74 +598,31 @@ Response:
     "created_at": "2026-06-08T00:00:00Z",
     "signature": null,
     "signing_key_id": null,
-    "schema_version": 2,
+    "schema_version": 3,
     "data_hash": "sha256:...",
-    "objects": [],
-    "knowledge": []
+    "objects": []
   }
 }
 ```
 
 The snapshot is a full projection baseline for the supported projection schema.
-Schema version 2 includes object and Knowledge projections. `data_hash` is
+Schema version 3 includes only object projections. `data_hash` is
 the canonical hash of the snapshot data object:
 
 ```json
 {
-  "objects": [],
-  "knowledge": []
+  "objects": []
 }
 ```
 
 The current snapshot is unsigned; `signature` and `signing_key_id` are `null`.
 
-The current CLI normal reads use the canonical object endpoints.
+## Domain Events and external Knowledge
 
-## Knowledge And Ontology Reads
-
-```text
-GET /api/v1/workspaces/{workspace_id}/knowledge?bundle_id=&type=&limit=&offset=
-GET /api/v1/workspaces/{workspace_id}/knowledge/{bundle_id}/{concept_id...}?format=source
-GET /api/v1/workspaces/{workspace_id}/ontology/traverse?bundle_id=&concept_id=&direction=out|in|both&depth=1..8
-GET /api/v1/workspaces/{workspace_id}/ontology/reachable-node-ids?bundle_id=&concept_id=&depth=1..8&max_results=&max_scanned_edges=&min_projection_sequence=
-GET /api/v1/workspaces/{workspace_id}/ontology/groundings?bundle_id=&concept_id=&entity_definition_id=
-GET /api/v1/workspaces/{workspace_id}/events
-GET /api/v1/workspaces/{workspace_id}/knowledge/proposals
-```
-
-Knowledge, grounding and Ontology traversal are canonical SQL reads (Rhiza in
-deployed mode; SQLite only locally and in tests).
-Full-text search is the external Meilisearch projection exposed through the
-separate `POST /search` endpoint.
-Knowledge detail exposes the source-byte-addressed `revision_id`. Supplying that ID
-with `format=source&revision_id=sha256:...` reads the exact accepted historical
-OKF source from the append-only command ledger, including after later replacement
-or removal. `knowledge.remove` remains the corresponding ledger tombstone.
-When embedded Rhiza Graph is available, the server may additionally
-serve outgoing unique reachable Concept IDs. This endpoint returns no path,
-depth, predicate or multiplicity information and never falls back to SQLite.
-It returns `503 graph_unavailable` when disabled, `503 stale_projection` when
-the projection has not reached the canonical or requested minimum sequence, and
-`422 resource_limit_exceeded` without partial results when either budget is
-exceeded. Successful responses include `projection_sequence` and
-`projection_generation` in `consistency`.
-Each reachability request compares the persisted workspace cursor to a fresh
-linearizable Knowledge event head. The cursor, head and native traversal must
-observe the same Rhiza applied slot; concurrent advancement returns retryable
-`503 stale_projection`. Missing workspace state, incompatible projection schema,
-a canonical start absent from the graph, or an active local reconciler also
-return `503 stale_projection`, not a successful empty result. A valid isolated
-Concept still returns an empty ID list. This is a single-projector read gate,
-not approval for concurrent multi-process projection rebuilds.
-Traversal is server-bounded to depth 8, 10,000 result
-rows, 100,000 edge expansions and a two-second deadline; exceeding a budget
-returns `422 resource_limit_exceeded`.
-Knowledge result pagination is ordered by `(bundle_id, concept_id)`.
-
-Domain Event instances and Knowledge proposal/review state are Journal-derived
-reads. Mutations use `event.emit`, `knowledge.propose` and `knowledge.review`
-through `POST /api/v1/kernel/commands`; accepted proposals publish an immutable
-`ontology` spec revision atomically.
+`GET /api/v1/workspaces/{workspace_id}/events` reads Journal-derived Domain Events.
+Mutations use `event.emit` through the Kernel command endpoint. Knowledge is
+externally owned; Knowledge, Concept traversal, reachability, grounding and
+proposal endpoints have been removed. Generic Ontology specs remain supported.
 
 If the requested `after` sequence is too old, the server returns:
 
@@ -873,30 +652,9 @@ Response:
     "kind": "sqlite",
     "cluster_id": "sqlite-local",
     "ready": true
-  },
-  "knowledge_projection": {
-    "enabled": true,
-    "status": "ready|degraded|rebuilding",
-    "healthy": true,
-    "error": null,
-    "sqlite_heads": {"wks_1": 42},
-    "graph_cursors": {"wks_1": 42},
-    "lag_events": {"wks_1": 0},
-    "last_success_at": "2026-08-29T00:00:00Z",
-    "rebuild_count": 0,
-    "projection_version": 3,
-    "production_approved": false,
-    "request_reads": true,
-    "search_backend": "meilisearch|unavailable",
-    "traversal_backend": "sqlite",
-    "reachable_node_ids_backend": "rhiza_graph"
   }
 }
 ```
-
-In SQLite-only mode, `knowledge_projection.status` is `disabled`.
-`request_reads` can be true only for the explicit reachable-node capability;
-`production_approved` remains false until the published operational gates pass.
 
 Rhiza readiness failures return `503 storage_unavailable`; the server does not
 synthesize a quorum claim from local process or Kubernetes state.
@@ -939,15 +697,11 @@ generic mutation capabilities.
 
 ```text
 GET /api/v1/workspaces/{workspace_id}/command-surface
-Authorization: Bearer <session_token>
 ```
 
-Returns definition-backed CLI nouns for a workspace. The CLI uses this endpoint
-before accepting `PLURAL_KEY create`, `PLURAL_KEY move`, `PLURAL_KEY get`,
-`PLURAL_KEY link`, or `PLURAL_KEY help`; undefined keys are rejected before
-audit or Kernel command submission.
+Returns definition-backed object nouns and command metadata for a workspace.
 
-Response:
+Response from an example workspace with the shown types and relation configured:
 
 ```json
 {
@@ -965,10 +719,10 @@ Response:
       "state_machine_id": null,
       "relations": [
         {
-          "id": "rdf_customer_contracts",
-          "key": "customer_contracts",
+          "id": "rdf_project_contracts",
+          "key": "project_contracts",
           "version": 1,
-          "from_object_type_id": "otp_customer",
+          "from_object_type_id": "otp_project",
           "to_object_type_id": "otp_contract",
           "cardinality": "one_to_many"
         }
@@ -981,9 +735,7 @@ Response:
 This noun shape is a breaking contract. `key` is the required plural slug and
 the only dynamic dispatch key; `singular` supplies one-object prose and
 `plural` labels the collection group. All three are emitted explicitly. There
-is no separate `slug`, singular-key alias, fallback, or inflection. Built-in
-keys follow the same rule: `people` and `companies` have singular names
-`person` and `company`. No pre-existing user-defined object types are migrated
+is no separate `slug`, singular-key alias, fallback, or inflection. No pre-existing user-defined object types are migrated
 by this contract.
 
 `object_type_id` is the stable canonical identity. Noun strings do not replace
@@ -996,76 +748,14 @@ fresh schema has no template table. Existing v2 databases are rejected rather
 than silently modified; retain a backup and perform a separately planned logical
 data migration into a fresh database (and fresh Rhiza cluster identity/storage).
 No automatic migration or deletion of existing database files is performed.
-Backoffice owns screen layouts and widgets; Compos retains schemas, semantic
-Task bindings and atomic submission validation. The CLI web console renders its
-own schema-derived forms, not persisted HTML.
-
-## Actor Capability Management
-
-```text
-POST /api/v1/workspaces/{workspace_id}/actor-capabilities
-GET /api/v1/workspaces/{workspace_id}/actor-capabilities
-```
-
-These endpoints are administrative control-plane APIs. They require an
-authenticated admin principal and manage scoped service actor capabilities
-only. They are not business aggregate mutation APIs.
-
-Grant request:
-
-```json
-{
-  "principal_id": "svc_runtime",
-  "requested_actor": {
-    "type": "service",
-    "id": "svc_import"
-  },
-  "command_type": "object.create",
-  "causation_source": "api",
-  "relation_definition_id": null,
-  "idempotency_key_prefix": "svc_import/",
-  "max_automation_recursion_depth": null
-}
-```
-
-Grant response:
-
-```json
-{
-  "data": {
-    "id": "cap_...",
-    "workspace_id": "wks_...",
-    "principal_id": "svc_runtime",
-    "requested_actor": {
-      "type": "service",
-      "id": "svc_import"
-    },
-    "command_type": "object.create",
-    "causation_source": "api",
-    "relation_definition_id": null,
-    "idempotency_key_prefix": "svc_import/",
-    "max_automation_recursion_depth": null,
-    "created_at": "..."
-  }
-}
-```
-
-User actors cannot be granted scoped actor capabilities. Service capability
-grants must not include `max_automation_recursion_depth`. Automation dispatch
-does not use actor capability grants; it runs under the creator-owned
-ReactiveRule authority. `relation.link` and `relation.unlink` capability
-grants must include `relation_definition_id` so service actors cannot receive
-workspace-wide relation mutation authority; non-relation grants must not
-include `relation_definition_id`.
+Clients own screen layouts and widgets; Compos retains schemas, semantic
+Task bindings and atomic submission validation.
 
 ## Adapter Inbound Events
 
 ```text
 POST /api/v1/workspaces/{workspace_id}/adapter/inbound-events
-Authorization: Bearer <session_token>
 ```
-
-The authenticated principal must be a member of `{workspace_id}`.
 
 Request:
 
@@ -1111,10 +801,7 @@ into the request Journal and `_compos` outbox metadata on SQLite and Rhiza;
 dispatch retry retains that snapshot. The revision means logical authorization
 generation, not an internal OAuth token refresh/CAS version.
 
-Revisionless connections remain the existing legacy service integration, not a
-fallback for a new user-profile authorization path. These pins do not prove
-profile ownership, consent or permission; user-profile resolution and GoAuthy's
-optional credential extension are not implemented by this contract.
+These pins do not prove profile ownership, consent or permission.
 
 ### Conductor dispatch acknowledgment
 
@@ -1133,7 +820,6 @@ execution. Dispatch acknowledgment is not a terminal Work result.
 
 ```text
 POST /internal/v1/conductor/callbacks
-Authorization: Bearer <COMPOS_CONDUCTOR_CALLBACK_TOKEN>
 ```
 
 The callback must include `callback_id`, `workspace_id`,
@@ -1163,12 +849,12 @@ Function, Agent, submission, or completion facts.
 ```text
 GET /v1/connector/objects/{object_key}/schema
 GET /v1/connector/objects/{object_key}/records/{record_id}
-Authorization: Bearer <COMPOS_CONDUCTOR_TOKEN>
 X-Conductor-Workspace-Id: <workspace_id>
 ```
 
 These endpoints are the narrow service boundary for Conductor's built-in
-`provider=compos` connector. Both token and workspace scope are mandatory.
+`provider=compos` connector. Workspace scope is mandatory; access restriction
+belongs to the deployment network boundary.
 Mutation and arbitrary operation endpoints are intentionally absent; Compos
 business writes remain Kernel commands.
 
@@ -1176,12 +862,11 @@ business writes remain Kernel commands.
 
 ```text
 POST /api/v1/workspaces/{workspace_id}/search
-Authorization: Bearer <session_token>
 Content-Type: application/json
 ```
 
-Full-text search proxied through Meilisearch. The authenticated principal must
-be a member of `{workspace_id}`. Requires `COMPOS_MEILISEARCH_URL` server
+Full-text search proxied through Meilisearch. The server enforces the workspace
+filter. Requires `COMPOS_MEILISEARCH_URL` server
 configuration; returns `503 search_unavailable` when Meilisearch is not
 configured.
 
@@ -1202,6 +887,12 @@ All fields are optional; an empty `q` performs a filtered listing. `filter` acce
 `sort` is an array of sortable attributes with optional direction suffix.
 The proxy sends the mandatory workspace predicate and caller filter as separate
 top-level AND terms, so caller syntax cannot widen the workspace boundary.
+The server retrieves `object_id` internally even for restricted attribute requests,
+discards hits without a non-empty string object ID, and hides that internal field
+unless requested. Existing indexes need no new filterable attributes. Engine
+totals and facets are omitted because they can include legacy documents;
+`returnedHits` counts only returned objects on this page. Offsets retain engine
+semantics, so pages may be short or empty before a workspace snapshot rebuild.
 
 Success response:
 
@@ -1220,7 +911,7 @@ Success response:
         "updated_at": "2026-06-08T00:00:00Z"
       }
     ],
-    "estimatedTotalHits": 1,
+    "returnedHits": 1,
     "limit": 20,
     "offset": 0,
     "processingTimeMs": 1
@@ -1233,7 +924,7 @@ return the canonical Compos object ID in `id`, even when the engine uses a
 workspace-qualified hash as its document ID. `object_id` also contains the
 canonical ID when requested or when all attributes are returned. Selecting
 only `id` does not expose this internal helper attribute. Other response fields
-and Knowledge IDs retain the Meilisearch response shape.
+retain the Meilisearch response shape.
 
 ## Forbidden HTTP Shapes
 

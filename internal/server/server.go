@@ -11,85 +11,42 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mrchypark/compos/internal/kernel"
-	rhizaprojection "github.com/mrchypark/compos/internal/rhizaprojection"
 	"github.com/mrchypark/compos/internal/store"
 	"github.com/mrchypark/rhiza"
 )
 
 type Server struct {
-	store                       *store.Store
-	kernel                      *kernel.Executor
-	mux                         *http.ServeMux
-	graphProjection             *rhizaprojection.Projection
-	graphProjectionSet          bool
-	graphProjectionMu           sync.RWMutex
-	graphProjectionSync         sync.RWMutex
-	graphProjectionErr          string
-	graphProjectionHeads        map[string]int64
-	graphProjectionCursors      map[string]int64
-	graphProjectionRebuilding   bool
-	graphProjectionLastSuccess  string
-	graphProjectionRebuilds     int64
-	graphProjectionWake         chan struct{}
-	graphProjectionCancel       context.CancelFunc
-	graphProjectionDone         chan struct{}
-	conductorURL                string
-	conductorToken              string
-	conductorCallbackToken      string
-	conductorClient             *http.Client
-	conductorWake               chan struct{}
-	conductorCancel             context.CancelFunc
-	conductorDone               chan struct{}
-	workflowWake                chan struct{}
-	workflowCancel              context.CancelFunc
-	workflowDone                chan struct{}
-	searchURL                   string
-	searchIndex                 string
-	searchKey                   string
-	searchClient                *http.Client
-	searchSyncerToken           string
-	searchSyncerWorkspaceID     string
-	auth                        AuthConfig
-	authClient                  *http.Client
-	oauth2IntrospectionEndpoint string
-	oauth2UserInfoEndpoint      string
+	store                   *store.Store
+	kernel                  *kernel.Executor
+	mux                     *http.ServeMux
+	conductorURL            string
+	conductorToken          string
+	conductorClient         *http.Client
+	conductorWake           chan struct{}
+	conductorCancel         context.CancelFunc
+	conductorDone           chan struct{}
+	workflowWake            chan struct{}
+	workflowCancel          context.CancelFunc
+	workflowDone            chan struct{}
+	searchURL               string
+	searchIndex             string
+	searchKey               string
+	searchClient            *http.Client
+	searchSyncerWorkspaceID string
 }
 
 func New(s *store.Store) *Server {
 	server := &Server{
 		store: s, kernel: kernel.NewStoreExecutor(s), mux: http.NewServeMux(),
-		searchClient: &http.Client{Timeout: 10 * time.Second}, auth: AuthConfig{Mode: AuthModeNone},
-		authClient: &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }},
+		searchClient: &http.Client{Timeout: 10 * time.Second},
 	}
 	server.routes()
 	server.enableWorkflowScheduler()
-	if s.GraphAvailable() {
-		server.enableRhizaGraph()
-	}
 	return server
-}
-
-func (server *Server) enableRhizaGraph() {
-	server.graphProjectionSet = true
-	projection, err := rhizaprojection.Open(server.store)
-	if err != nil {
-		server.graphProjectionErr = err.Error()
-		return
-	}
-	server.graphProjection = projection
-	server.graphProjectionErr = "reconciling"
-	server.graphProjectionHeads = map[string]int64{}
-	server.graphProjectionCursors = map[string]int64{}
-	server.graphProjectionWake = make(chan struct{}, 1)
-	server.graphProjectionDone = make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
-	server.graphProjectionCancel = cancel
-	go server.runGraphProjectionReconciler(ctx)
 }
 
 func (s *Server) Close() error {
@@ -101,30 +58,14 @@ func (s *Server) Close() error {
 		s.conductorCancel()
 		<-s.conductorDone
 	}
-	if s.graphProjectionCancel != nil {
-		s.graphProjectionCancel()
-		<-s.graphProjectionDone
-	}
-	if s.graphProjection != nil {
-		return s.graphProjection.Close()
-	}
 	return nil
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r, ok := s.authenticateRequest(w, r)
-	if !ok {
-		return
-	}
 	s.mux.ServeHTTP(w, r)
 }
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/health", s.health)
-	s.mux.HandleFunc("POST /api/v1/auth/rauthy", s.authRauthy)
-	s.mux.HandleFunc("POST /api/v1/auth/pocketbase", s.authPocketBase)
-	s.mux.HandleFunc("GET /api/v1/auth/session", s.authSession)
-	s.mux.HandleFunc("POST /api/v1/auth/logout", s.authLogout)
-	s.mux.HandleFunc("POST /api/v1/auth/identity", s.authIdentity)
 	s.mux.HandleFunc("GET /api/v1/search-syncer/workspace", s.searchSyncerWorkspace)
 	s.mux.HandleFunc("POST /api/v1/workspaces", s.createWorkspace)
 	s.mux.HandleFunc("GET /api/v1/kernel/command-registry", func(w http.ResponseWriter, r *http.Request) {
@@ -135,8 +76,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/definitions", s.listDefinitions)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/definitions/{revision_id}", s.readDefinition)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/objects/{object_id}/relations", s.listObjectRelations)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/actor-capabilities", s.listCapabilities)
-	s.mux.HandleFunc("POST /api/v1/workspaces/{workspace_id}/actor-capabilities", s.grantCapability)
 	s.mux.HandleFunc("POST /api/v1/workspaces/{workspace_id}/adapter/inbound-events", s.appendAdapterEvent)
 	s.mux.HandleFunc("POST /internal/v1/conductor/callbacks", s.appendConductorCallback)
 	s.mux.HandleFunc("GET /v1/connector/objects/{object_key}/schema", s.conductorObjectSchema)
@@ -151,18 +90,26 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/work", s.listHumanWork)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/work/{stream_id}", s.readWork)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/events", s.listDomainEvents)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/knowledge/proposals", s.listKnowledgeProposals)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/command-ledger", s.listLedger)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/command-ledger/{command_id}", s.getLedger)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/object-types/{object_type_id}/schema-revisions", s.schemaRevisions)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/projection/events", s.projectionEvents)
 	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/projection/snapshot", s.projectionSnapshot)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/knowledge", s.listKnowledge)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/knowledge/{bundle_id}/{concept_id...}", s.readKnowledge)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/ontology/traverse", s.traverseOntology)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/ontology/reachable-node-ids", s.reachableOntologyNodeIDs)
-	s.mux.HandleFunc("GET /api/v1/workspaces/{workspace_id}/ontology/groundings", s.listGroundings)
 	s.mux.HandleFunc("POST /api/v1/workspaces/{workspace_id}/search", s.search)
+}
+
+// ConfigureSearchSyncer selects the workspace exposed to the search syncer.
+func (s *Server) ConfigureSearchSyncer(workspace string) error {
+	s.searchSyncerWorkspaceID = strings.TrimSpace(workspace)
+	return nil
+}
+
+func (s *Server) searchSyncerWorkspace(w http.ResponseWriter, r *http.Request) {
+	if s.searchSyncerWorkspaceID == "" {
+		problem(w, 503, "workspace_unavailable", "configuration", false, "search workspace is not configured")
+		return
+	}
+	write(w, 200, map[string]any{"workspace_id": s.searchSyncerWorkspaceID})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -170,30 +117,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "storage_unavailable", "storage", true, err.Error())
 		return
 	}
-	s.graphProjectionMu.RLock()
-	status := "disabled"
-	if s.graphProjectionSet {
-		status = "degraded"
-		if s.graphProjectionRebuilding {
-			status = "rebuilding"
-		} else if s.graphProjection != nil && s.graphProjectionErr == "" && sequencesCurrent(s.graphProjectionHeads, s.graphProjectionCursors) {
-			status = "ready"
-		}
-	}
-	lags := map[string]int64{}
-	for workspaceID, head := range s.graphProjectionHeads {
-		lags[workspaceID] = head - s.graphProjectionCursors[workspaceID]
-	}
-	projectionStatus := map[string]any{
-		"enabled": s.graphProjectionSet, "status": status, "healthy": status == "ready", "error": nullableString(s.graphProjectionErr),
-		"production_approved": false, "request_reads": status == "ready", "search_backend": map[bool]string{true: "meilisearch", false: "unavailable"}[s.searchURL != ""], "traversal_backend": "sqlite",
-		"reachable_node_ids_backend": map[bool]string{true: "rhiza_graph", false: "unavailable"}[status == "ready"],
-		"sqlite_heads":               cloneSequences(s.graphProjectionHeads), "graph_cursors": cloneSequences(s.graphProjectionCursors), "lag_events": lags,
-		"last_success_at": nullableString(s.graphProjectionLastSuccess),
-		"rebuild_count":   s.graphProjectionRebuilds, "projection_version": rhizaprojection.SchemaVersion,
-	}
-	s.graphProjectionMu.RUnlock()
-	write(w, 200, map[string]any{"status": "ok", "storage": map[string]any{"kind": s.store.Kind(), "cluster_id": s.store.ClusterID(), "ready": s.store.Ready()}, "knowledge_projection": projectionStatus})
+	write(w, 200, map[string]any{"status": "ok", "storage": map[string]any{"kind": s.store.Kind(), "cluster_id": s.store.ClusterID(), "ready": s.store.Ready()}})
 }
 
 func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -225,7 +149,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	} else {
 		err = s.store.Transact(r.Context(), "workspace:"+principal+":"+body.IdempotencyKey, func(tx store.Tx) error {
 			var storedHash, result string
-			err := tx.QueryRow(`SELECT request_hash,result_json FROM workspace_creation_requests WHERE authenticated_principal_id=? AND idempotency_key=?`, principal, body.IdempotencyKey).Scan(&storedHash, &result)
+			err := tx.QueryRow(`SELECT request_hash,result_json FROM workspace_creation_requests WHERE principal_id=? AND idempotency_key=?`, principal, body.IdempotencyKey).Scan(&storedHash, &result)
 			if err == nil {
 				if storedHash != hash {
 					return errors.New("idempotency conflict")
@@ -249,20 +173,10 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 				}
 				return err
 			}
-			if _, err = tx.Exec(`INSERT INTO workspace_memberships VALUES(?,?,'owner',?)`, id, principal, now); err != nil {
-				return err
-			}
-			if err = provisionBuiltins(r.Context(), tx, id, body.Name, principal, now); err != nil {
-				return err
-			}
 			response = map[string]any{"data": map[string]any{
 				"id": id, "workspace_id": id, "key": body.Key, "name": body.Name, "version": 1,
-				"creator_principal_id": principal, "owner_principal_id": principal,
-				"creator_person_object_instance_id":    "obj_creator_" + id,
-				"workspace_company_object_instance_id": "obj_company_" + id,
-				"works_for_relation_definition_id":     "rdf_builtin_works_for_" + id,
-				"works_for_object_relation_id":         "rel_creator_company_" + id,
-				"created_at":                           now, "created": true, "status": "created",
+				"creator_principal_id": principal,
+				"created_at":           now, "created": true, "status": "created",
 			}}
 			resultJSON, _ := json.Marshal(response)
 			_, err = tx.Exec(`INSERT INTO workspace_creation_requests VALUES(?,?,?,?,?,?,?)`, principal, body.IdempotencyKey, hash, string(payload), string(resultJSON), id, now)
@@ -294,7 +208,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key, idempotencyKey, requestJSON, requestHash string) (any, bool, error) {
 	readRequest := func() (any, string, error) {
 		var storedHash, result string
-		err := s.store.ReadRow(ctx, store.ReadLinearizable, `SELECT request_hash,result_json FROM workspace_creation_requests WHERE authenticated_principal_id=? AND idempotency_key=?`, principal, idempotencyKey).Scan(&storedHash, &result)
+		err := s.store.ReadRow(ctx, store.ReadLinearizable, `SELECT request_hash,result_json FROM workspace_creation_requests WHERE principal_id=? AND idempotency_key=?`, principal, idempotencyKey).Scan(&storedHash, &result)
 		if err != nil {
 			return nil, "", err
 		}
@@ -322,27 +236,17 @@ func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key,
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	response := map[string]any{"data": map[string]any{
 		"id": id, "workspace_id": id, "key": key, "name": name, "version": 1,
-		"creator_principal_id": principal, "owner_principal_id": principal,
-		"creator_person_object_instance_id":    "obj_creator_" + id,
-		"workspace_company_object_instance_id": "obj_company_" + id,
-		"works_for_relation_definition_id":     "rdf_builtin_works_for_" + id,
-		"works_for_object_relation_id":         "rel_creator_company_" + id,
-		"created_at":                           now, "created": true, "status": "created",
+		"creator_principal_id": principal,
+		"created_at":           now, "created": true, "status": "created",
 	}}
 	resultJSON, _ := json.Marshal(response)
 	zero, one := int64(0), int64(1)
 	statements := []rhiza.SQLStatement{
-		{SQL: `SELECT authenticated_principal_id FROM workspace_creation_requests WHERE authenticated_principal_id=? AND idempotency_key=?`, Args: []any{principal, idempotencyKey}, WantRows: true, ExpectedReturnedRows: &zero},
+		{SQL: `SELECT principal_id FROM workspace_creation_requests WHERE principal_id=? AND idempotency_key=?`, Args: []any{principal, idempotencyKey}, WantRows: true, ExpectedReturnedRows: &zero},
 		{SQL: `SELECT id FROM workspaces WHERE key=?`, Args: []any{key}, WantRows: true, ExpectedReturnedRows: &zero},
 		{SQL: `INSERT INTO workspaces(id,key,name,version,created_at,updated_at) VALUES(?,?,?,1,?,?)`, Args: []any{id, key, name, now, now}, ExpectedRowsAffected: &one},
-		{SQL: `INSERT INTO workspace_memberships(workspace_id,principal_id,role,created_at) VALUES(?,?,'owner',?)`, Args: []any{id, principal, now}, ExpectedRowsAffected: &one},
 	}
-	builtins, err := provisionBuiltinStatements(ctx, id, name, principal, now)
-	if err != nil {
-		return nil, false, err
-	}
-	statements = append(statements, builtins...)
-	statements = append(statements, rhiza.SQLStatement{SQL: `INSERT INTO workspace_creation_requests(authenticated_principal_id,idempotency_key,request_hash,request_payload_json,result_json,workspace_id,created_at) VALUES(?,?,?,?,?,?,?)`, Args: []any{principal, idempotencyKey, requestHash, requestJSON, string(resultJSON), id, now}, ExpectedRowsAffected: &one})
+	statements = append(statements, rhiza.SQLStatement{SQL: `INSERT INTO workspace_creation_requests(principal_id,idempotency_key,request_hash,request_payload_json,result_json,workspace_id,created_at) VALUES(?,?,?,?,?,?,?)`, Args: []any{principal, idempotencyKey, requestHash, requestJSON, string(resultJSON), id, now}, ExpectedRowsAffected: &one})
 	applyErr := s.store.ApplyStatements(ctx, "workspace:"+uuid.NewString(), statements)
 	if applyErr == nil {
 		return response, true, nil
@@ -357,82 +261,6 @@ func (s *Server) createWorkspaceRhiza(ctx context.Context, principal, name, key,
 		return nil, false, errors.New("workspace key conflict")
 	}
 	return nil, false, applyErr
-}
-
-type contextExecer interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-type statementCollector struct {
-	one        int64
-	statements []rhiza.SQLStatement
-}
-
-func (c *statementCollector) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
-	c.statements = append(c.statements, rhiza.SQLStatement{SQL: query, Args: args, ExpectedRowsAffected: &c.one})
-	return affectedRows(1), nil
-}
-
-type affectedRows int64
-
-func (r affectedRows) LastInsertId() (int64, error) { return 0, nil }
-func (r affectedRows) RowsAffected() (int64, error) { return int64(r), nil }
-
-func provisionBuiltinStatements(ctx context.Context, workspace, workspaceName, principal, ts string) ([]rhiza.SQLStatement, error) {
-	collector := &statementCollector{one: 1}
-	err := provisionBuiltins(ctx, collector, workspace, workspaceName, principal, ts)
-	return collector.statements, err
-}
-
-func provisionBuiltins(ctx context.Context, tx contextExecer, workspace, workspaceName, principal, ts string) error {
-	peopleID := "otp_builtin_person_" + workspace
-	companiesID := "otp_builtin_company_" + workspace
-	relationID := "rdf_builtin_works_for_" + workspace
-	personID := "obj_creator_" + workspace
-	companyID := "obj_company_" + workspace
-	edgeID := "rel_creator_company_" + workspace
-	peopleSchema := canonical(map[string]any{"type": "object", "additionalProperties": true, "properties": map[string]any{"display_name": map[string]any{"type": "string"}, "email": map[string]any{"type": "string", "format": "email"}, "phone": map[string]any{"type": "string"}}})
-	companySchema := canonical(map[string]any{"type": "object", "additionalProperties": true, "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []string{"name"}})
-	link := map[string]any{"id": relationID, "key": "works_for", "from_object_type_id": peopleID, "to_object_type_id": companiesID, "cardinality": "many_to_one", "required": false}
-	relationSchema := canonical(map[string]any{"links": []any{link}})
-	for _, item := range []struct{ id, key, singular, plural, schema string }{{peopleID, "people", "person", "people", peopleSchema}, {companiesID, "companies", "company", "companies", companySchema}} {
-		digest := schemaRevisionDigest(1, item.schema, relationSchema, "")
-		if _, err := tx.ExecContext(ctx, `INSERT INTO object_types(id,workspace_id,key,singular,plural,schema_version,field_schema_json,relation_schema_json,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,1,?,?,1,?,?,?,?)`, item.id, workspace, item.key, item.singular, item.plural, item.schema, relationSchema, ts, ts, "system", "system"); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO object_type_schema_revisions(workspace_id,object_type_id,schema_version,field_schema_json,relation_schema_json,digest,created_at,created_by_principal_id) VALUES(?,?,1,?,?,?,?,?)`, workspace, item.id, item.schema, relationSchema, digest, ts, "system"); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO relation_definitions(id,workspace_id,key,from_object_type_id,to_object_type_id,cardinality,required,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,'many_to_one',0,1,?,?,?,?)`, relationID, workspace, "works_for", peopleID, companiesID, ts, ts, "system", "system"); err != nil {
-		return err
-	}
-	personValues := canonical(map[string]any{"display_name": principal})
-	companyValues := canonical(map[string]any{"name": workspaceName})
-	if _, err := tx.ExecContext(ctx, `INSERT INTO object_instances(id,workspace_id,object_type_id,object_type_schema_version,title,payload_json,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,?,1,?,?,?,?)`, personID, workspace, peopleID, 1, principal, personValues, ts, ts, principal, principal); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO object_instances(id,workspace_id,object_type_id,object_type_schema_version,title,payload_json,version,created_at,updated_at,created_by_principal_id,updated_by_principal_id) VALUES(?,?,?,?,?,?,1,?,?,?,?)`, companyID, workspace, companiesID, 1, workspaceName, companyValues, ts, ts, principal, principal); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO principal_person_bindings VALUES(?,?,?,?,?,?)`, workspace, principal, personID, "workspace_creator", principal, ts); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO object_relations VALUES(?,?,?,?,?,1,?,?,?,?)`, edgeID, workspace, relationID, personID, companyID, ts, ts, principal, principal); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO relation_cardinality_slots VALUES(?,?,?,?,?,?,?)`, "slot_"+edgeID, workspace, relationID, edgeID, "from", personID, ts); err != nil {
-		return err
-	}
-	for _, row := range []struct {
-		typeID, objectID, field, kind string
-		value                         any
-	}{{peopleID, personID, "display_name", "string", principal}, {companiesID, companyID, "name", "string", workspaceName}} {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO object_field_index(workspace_id,object_type_id,object_instance_id,field_name,value_kind,value_text) VALUES(?,?,?,?,?,?)`, workspace, row.typeID, row.objectID, row.field, row.kind, row.value); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func schemaRevisionDigest(version int64, field, relation, state string) string {
@@ -452,19 +280,13 @@ func (s *Server) submitCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.CommandType == "function.record_result" || c.CommandType == "agent.record_result" || c.CommandType == "workflow.complete" {
-		problem(w, http.StatusForbidden, "forbidden", "authz", false, "internal runtime completion commands are not accepted on the public command endpoint")
+		problem(w, http.StatusForbidden, "forbidden", "protocol", false, "internal runtime completion commands are not accepted on the public command endpoint")
 		return
 	}
 	receipt, err := s.kernel.Execute(r.Context(), principal(r), c)
 	if err != nil {
 		commandError(w, err)
 		return
-	}
-	if c.CommandType == "knowledge.accept" || c.CommandType == "knowledge.remove" {
-		if receipt.ProjectionSequence != nil {
-			s.markGraphProjectionHead(c.WorkspaceID, *receipt.ProjectionSequence)
-		}
-		s.wakeGraphProjection()
 	}
 	if c.CommandType == "function.invoke" {
 		s.wakeConductor()
@@ -475,20 +297,6 @@ func (s *Server) submitCommand(w http.ResponseWriter, r *http.Request) {
 		response["client_refs"] = receipt.ClientRefs
 	}
 	write(w, 200, response)
-}
-
-func (s *Server) graphProjectionReady(workspaceID string) bool {
-	s.graphProjectionMu.RLock()
-	defer s.graphProjectionMu.RUnlock()
-	return s.graphProjection != nil && s.graphProjectionErr == "" && !s.graphProjectionRebuilding && s.graphProjectionCursors[workspaceID] >= s.graphProjectionHeads[workspaceID]
-}
-
-func cloneSequences(source map[string]int64) map[string]int64 {
-	copy := make(map[string]int64, len(source))
-	for key, value := range source {
-		copy[key] = value
-	}
-	return copy
 }
 
 func (s *Server) commandSurface(w http.ResponseWriter, r *http.Request) {
@@ -557,6 +365,7 @@ func (s *Server) readObject(w http.ResponseWriter, r *http.Request) {
 	}
 	write(w, 200, map[string]any{"data": data, "consistency": consistency("canonical_linearizable")})
 }
+
 func (s *Server) object(ctx context.Context, workspace, id string) (map[string]any, error) {
 	var typeID, typeKey, title, payload, state string
 	var schemaVersion, version int64
@@ -625,7 +434,7 @@ func (s *Server) listHumanWork(w http.ResponseWriter, r *http.Request) {
 	offset := boundedInt(r, "offset", 0, 0, 1<<30)
 	// ponytail: replay the journal directly; materialize an inbox only when measured queue latency requires it.
 	rows, err := s.store.ReadRows(r.Context(), store.ReadLocal, `
-		SELECT route.stream_id,route.stream_sequence,route.payload_json,route.created_at,
+		SELECT route.stream_id,route.stream_sequence,route.payload_json,route.created_at,route.participant_id,
 		       opened.spec_revision_id,opened.principal_id,opened.payload_json,opened.created_at,
 		       spec.family_id,spec.revision,spec.payload_json,spec.digest,
 		       (SELECT MAX(j.stream_sequence) FROM journal_records j WHERE j.workspace_id=route.workspace_id AND j.stream_id=route.stream_id),
@@ -639,11 +448,11 @@ func (s *Server) listHumanWork(w http.ResponseWriter, r *http.Request) {
 		JOIN journal_records opened ON opened.workspace_id=route.workspace_id AND opened.stream_id=route.stream_id AND opened.kind='work.opened'
 		JOIN spec_revisions spec ON spec.workspace_id=opened.workspace_id AND spec.id=opened.spec_revision_id
 		WHERE route.workspace_id=? AND route.kind='work.routed'
-		  AND route.participant_kind='human' AND route.participant_id=?
+		  AND route.participant_kind='human'
 		  AND route.stream_sequence=(SELECT MAX(r2.stream_sequence) FROM journal_records r2 WHERE r2.workspace_id=route.workspace_id AND r2.stream_id=route.stream_id AND r2.kind='work.routed' AND COALESCE(json_extract(r2.payload_json,'$.workflow_route_id'),'')=COALESCE(json_extract(route.payload_json,'$.workflow_route_id'),''))
 		  AND NOT EXISTS (SELECT 1 FROM journal_records terminal WHERE terminal.workspace_id=route.workspace_id AND terminal.stream_id=route.stream_id AND terminal.kind IN ('work.satisfied','work.cancelled'))
 		  AND NOT EXISTS (SELECT 1 FROM journal_records submitted WHERE submitted.workspace_id=route.workspace_id AND submitted.stream_id=route.stream_id AND submitted.kind='work.submitted' AND submitted.stream_sequence>route.stream_sequence AND COALESCE(json_extract(submitted.payload_json,'$.workflow_route_id'),'')=COALESCE(json_extract(route.payload_json,'$.workflow_route_id'),''))
-		ORDER BY route.created_at,route.stream_id LIMIT ? OFFSET ?`, r.PathValue("workspace_id"), principal(r), limit, offset)
+		ORDER BY route.created_at,route.stream_id LIMIT ? OFFSET ?`, r.PathValue("workspace_id"), limit, offset)
 	if err != nil {
 		dbError(w, err)
 		return
@@ -651,10 +460,10 @@ func (s *Server) listHumanWork(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := []any{}
 	for rows.Next() {
-		var id, routePayload, assignedAt, taskID, owner, openedPayload, openedAt, family, taskPayload, digest, updatedAt string
+		var id, routePayload, assignedAt, assigneeID, taskID, owner, openedPayload, openedAt, family, taskPayload, digest, updatedAt string
 		var assignedSequence, revision, version int64
 		var activeFunctions, activeWorkflows, deadlineReached bool
-		if err := rows.Scan(&id, &assignedSequence, &routePayload, &assignedAt, &taskID, &owner, &openedPayload, &openedAt, &family, &revision, &taskPayload, &digest, &version, &updatedAt, &activeFunctions, &activeWorkflows, &deadlineReached); err != nil {
+		if err := rows.Scan(&id, &assignedSequence, &routePayload, &assignedAt, &assigneeID, &taskID, &owner, &openedPayload, &openedAt, &family, &revision, &taskPayload, &digest, &version, &updatedAt, &activeFunctions, &activeWorkflows, &deadlineReached); err != nil {
 			dbError(w, err)
 			return
 		}
@@ -663,7 +472,7 @@ func (s *Server) listHumanWork(w http.ResponseWriter, r *http.Request) {
 		item := map[string]any{
 			"id": id, "version": version, "status": projectedWorkStatus(false, false, activeFunctions, activeWorkflows, false, true),
 			"task":               map[string]any{"revision_id": taskID, "family_id": family, "revision": revision, "digest": digest, "spec": raw(taskPayload)},
-			"owner_principal_id": owner, "assignee": map[string]any{"kind": "human", "id": principal(r)}, "context": opened["context"],
+			"owner_principal_id": owner, "assignee": map[string]any{"kind": "human", "id": assigneeID}, "context": opened["context"],
 			"deadline_at": opened["deadline_at"], "deadline_reached": deadlineReached,
 			"assigned_sequence": assignedSequence, "assigned_at": assignedAt, "opened_at": openedAt, "updated_at": updatedAt,
 		}
@@ -855,7 +664,7 @@ func projectedWorkStatus(cancelled, completed, activeFunctions, activeWorkflows,
 func (s *Server) listLedger(w http.ResponseWriter, r *http.Request) {
 	limit := boundedInt(r, "limit", 50, 1, 100)
 	offset := boundedInt(r, "offset", 0, 0, 1<<30)
-	rows, err := s.store.ReadRows(r.Context(), store.ReadLocal, `SELECT command_id,authenticated_principal_id,idempotency_key,command_type,outcome,result_json,effective_at,created_at FROM command_ledger WHERE workspace_id=? ORDER BY created_at DESC,command_id LIMIT ? OFFSET ?`, r.PathValue("workspace_id"), limit, offset)
+	rows, err := s.store.ReadRows(r.Context(), store.ReadLocal, `SELECT command_id,principal_id,idempotency_key,command_type,outcome,result_json,effective_at,created_at FROM command_ledger WHERE workspace_id=? ORDER BY created_at DESC,command_id LIMIT ? OFFSET ?`, r.PathValue("workspace_id"), limit, offset)
 	if err != nil {
 		dbError(w, err)
 		return
@@ -868,7 +677,7 @@ func (s *Server) listLedger(w http.ResponseWriter, r *http.Request) {
 			dbError(w, err)
 			return
 		}
-		data = append(data, map[string]any{"command_id": id, "authenticated_principal_id": principal, "idempotency_key": key, "command_type": commandType, "outcome": outcome, "result": raw(result), "effective_at": effective, "created_at": created})
+		data = append(data, map[string]any{"command_id": id, "principal_id": principal, "idempotency_key": key, "command_type": commandType, "outcome": outcome, "result": raw(result), "effective_at": effective, "created_at": created})
 	}
 	var total int
 	_ = s.store.ReadRow(r.Context(), store.ReadLocal, `SELECT COUNT(*) FROM command_ledger WHERE workspace_id=?`, r.PathValue("workspace_id")).Scan(&total)
@@ -953,17 +762,12 @@ func (s *Server) projectionSnapshot(w http.ResponseWriter, r *http.Request) {
 		dbError(w, err)
 		return
 	}
-	knowledge, err := s.snapshotKnowledge(r.Context(), workspace)
-	if err != nil {
-		dbError(w, err)
-		return
-	}
-	data := map[string]any{"objects": objects, "knowledge": knowledge}
+	data := map[string]any{"objects": objects}
 	created := time.Now().UTC().Format(time.RFC3339Nano)
 	snapshot := map[string]any{
 		"snapshot_id": "snap_" + workspace + "_" + strconv.FormatInt(sequence, 10), "workspace_id": workspace,
 		"projection_sequence": sequence, "created_at": created, "signature": nil, "signing_key_id": nil,
-		"schema_version": 2, "data_hash": sha([]byte(canonical(data))), "objects": objects, "knowledge": knowledge,
+		"schema_version": 3, "data_hash": sha([]byte(canonical(data))), "objects": objects,
 	}
 	write(w, 200, map[string]any{"snapshot": snapshot, "consistency": consistency("canonical_linearizable")})
 }
@@ -995,28 +799,6 @@ func (s *Server) snapshotObjects(ctx context.Context, workspace string) ([]any, 
 		data = append(data, item)
 	}
 	return data, nil
-}
-
-func (s *Server) snapshotKnowledge(ctx context.Context, workspace string) ([]any, error) {
-	rows, err := s.store.ReadRows(ctx, store.ReadLocal, `SELECT bundle_id,concept_id,concept_type,title,description,resource,body_markdown,content_hash,created_at,updated_at FROM knowledge_documents WHERE workspace_id=? ORDER BY bundle_id,concept_id`, workspace)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	data := []any{}
-	for rows.Next() {
-		var bundle, concept, conceptType, body, hash, created, updated string
-		var title, description, resource sql.NullString
-		if err := rows.Scan(&bundle, &concept, &conceptType, &title, &description, &resource, &body, &hash, &created, &updated); err != nil {
-			return nil, err
-		}
-		data = append(data, map[string]any{
-			"id": bundle + ":" + concept, "workspace_id": workspace, "bundle_id": bundle, "concept_id": concept,
-			"concept_type": conceptType, "title": nullString(title), "description": nullString(description),
-			"resource": nullString(resource), "body_markdown": body, "content_hash": hash, "created_at": created, "updated_at": updated,
-		})
-	}
-	return data, rows.Err()
 }
 
 func (s *Server) appendAdapterEvent(w http.ResponseWriter, r *http.Request) {
@@ -1107,56 +889,6 @@ func (s *Server) appendAdapterEventRhiza(ctx context.Context, id, workspaceID, a
 	return existingID, existingAt, err == nil && existingID == id, nil
 }
 
-func (s *Server) listCapabilities(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeAdmin(w, r) {
-		return
-	}
-	rows, err := s.store.ReadRows(r.Context(), store.ReadLocal, `SELECT id,principal_id,actor_type,actor_id,command_type,causation_source,relation_definition_id,idempotency_key_prefix,max_automation_recursion_depth FROM actor_capabilities WHERE workspace_id=? ORDER BY id`, r.PathValue("workspace_id"))
-	if err != nil {
-		dbError(w, err)
-		return
-	}
-	defer rows.Close()
-	data := []any{}
-	for rows.Next() {
-		var id, principal, actorType, actorID, commandType, source, relation, prefix string
-		var max sql.NullInt64
-		_ = rows.Scan(&id, &principal, &actorType, &actorID, &commandType, &source, &relation, &prefix, &max)
-		data = append(data, map[string]any{"id": id, "principal_id": principal, "requested_actor": map[string]any{"type": actorType, "id": actorID}, "command_type": commandType, "causation_source": source, "relation_definition_id": nullableString(relation), "idempotency_key_prefix": prefix, "max_automation_recursion_depth": nullInt(max)})
-	}
-	write(w, 200, map[string]any{"data": data})
-}
-
-func (s *Server) grantCapability(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeAdmin(w, r) {
-		return
-	}
-	var body struct {
-		PrincipalID                 string       `json:"principal_id"`
-		RequestedActor              kernel.Actor `json:"requested_actor"`
-		CommandType                 string       `json:"command_type"`
-		CausationSource             string       `json:"causation_source"`
-		RelationDefinitionID        *string      `json:"relation_definition_id"`
-		IdempotencyKeyPrefix        string       `json:"idempotency_key_prefix"`
-		MaxAutomationRecursionDepth *int64       `json:"max_automation_recursion_depth"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	relation := ""
-	if body.RelationDefinitionID != nil {
-		relation = *body.RelationDefinitionID
-	}
-	id := "cap_" + uuid.NewString()
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	err := s.store.Exec(r.Context(), "capability:"+id, `INSERT INTO actor_capabilities VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, r.PathValue("workspace_id"), body.PrincipalID, body.RequestedActor.Type, body.RequestedActor.ID, body.CommandType, body.CausationSource, relation, body.IdempotencyKeyPrefix, body.MaxAutomationRecursionDepth, now, now)
-	if err != nil {
-		dbError(w, err)
-		return
-	}
-	write(w, 201, map[string]any{"data": map[string]any{"id": id}})
-}
-
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return decodeLimit(w, r, v, 1<<20)
 }
@@ -1214,15 +946,10 @@ func commandError(w http.ResponseWriter, err error) {
 	}
 	problemDetails(w, status, e.Outcome, category, e.Retryable, e.Message, e.Details)
 }
-func principal(r *http.Request) string {
-	if value, ok := r.Context().Value(principalContextKey{}).(string); ok && value != "" {
-		return value
-	}
-	return "dev"
-}
-func raw(s string) any       { var v any; _ = json.Unmarshal([]byte(s), &v); return v }
-func canonical(v any) string { b, _ := json.Marshal(v); return string(b) }
-func sha(raw []byte) string  { return fmt.Sprintf("sha256:%x", kernelHash(raw)) }
+func principal(*http.Request) string { return "local" }
+func raw(s string) any               { var v any; _ = json.Unmarshal([]byte(s), &v); return v }
+func canonical(v any) string         { b, _ := json.Marshal(v); return string(b) }
+func sha(raw []byte) string          { return fmt.Sprintf("sha256:%x", kernelHash(raw)) }
 func kernelHash(raw []byte) [32]byte {
 	var v any
 	if json.Unmarshal(raw, &v) == nil {
