@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -48,6 +51,22 @@ func configureReleaseProvider(t *testing.T, ctx context.Context, provider string
 	config.ObjStoreBucket = bucket
 	if provider == "gcs" {
 		t.Setenv("STORAGE_EMULATOR_HOST", "http://"+endpoint)
+		tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"emulator-only","token_type":"Bearer","expires_in":3600}`))
+		}))
+		t.Cleanup(tokenServer.Close)
+		credentialDir := t.TempDir()
+		tokenFile := filepath.Join(credentialDir, "subject-token")
+		if err := os.WriteFile(tokenFile, []byte("emulator-only"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		credentialFile := filepath.Join(credentialDir, "credentials.json")
+		credential := fmt.Sprintf(`{"type":"external_account","audience":"//emulator.invalid/test","subject_token_type":"urn:ietf:params:oauth:token-type:jwt","token_url":%q,"credential_source":{"file":%q}}`, tokenServer.URL, tokenFile)
+		if err := os.WriteFile(credentialFile, []byte(credential), 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", credentialFile)
 		client, err := storage.NewClient(ctx, option.WithoutAuthentication())
 		if err != nil {
 			t.Fatal(err)

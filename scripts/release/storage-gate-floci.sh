@@ -32,4 +32,4 @@ for endpoint in "$COMPOS_RELEASE_S3_ENDPOINT" "$COMPOS_RELEASE_GCS_ENDPOINT" "$C
   done
   if [ "$ready" -ne 1 ]; then echo "provider did not start: $endpoint" >&2; exit 1; fi
 done
-sh scripts/release/storage-gate.sh "$results"
+sh scripts/release/storage-gate.sh "$results" "${2:-full}"

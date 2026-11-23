@@ -22,6 +22,28 @@ permissions:
   contents: read
 
 jobs:
+  recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Four-provider recovery and replay
+        run: sh scripts/release/storage-gate-floci.sh recovery-results recovery
+      - name: Upload recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: storage-recovery-${{ github.sha }}
+          path: recovery-results/
+          if-no-files-found: warn
+
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
