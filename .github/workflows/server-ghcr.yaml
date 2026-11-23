@@ -22,6 +22,28 @@ permissions:
   contents: read
 
 jobs:
+  recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Four-provider recovery and replay
+        run: sh scripts/release/storage-gate-floci.sh recovery-results recovery
+      - name: Upload recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: storage-recovery-${{ github.sha }}
+          path: recovery-results/
+          if-no-files-found: warn
+
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -48,7 +70,7 @@ jobs:
       - name: Go tests including typed queries and credential-free HTTP
         run: go test -json -count=1 -timeout=20m ./... > release-results/go-tests.jsonl 2>&1
       - name: Required single-node archive recovery and provider fencing
-        run: sh scripts/release/storage-gate.sh release-results
+        run: sh scripts/release/storage-gate-floci.sh release-results
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -60,7 +82,7 @@ jobs:
   image:
     # Run image diagnostics even when the separate storage gate is blocked.
     if: ${{ always() && !cancelled() }}
-    needs: verify
+    needs: [verify, recovery]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -90,14 +112,14 @@ jobs:
       - name: Health, workspace and Person image smoke
         run: sh scripts/release/server-smoke.sh "$SERVER_IMAGE" release-results
       - name: Login to GHCR
-        if: inputs.publish && needs.verify.result == 'success'
+        if: inputs.publish && needs.verify.result == 'success' && needs.recovery.result == 'success'
         uses: docker/login-action@v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push exactly the smoke-tested image
-        if: inputs.publish && needs.verify.result == 'success'
+        if: inputs.publish && needs.verify.result == 'success' && needs.recovery.result == 'success'
         shell: sh
         run: |
           docker push "$SERVER_IMAGE" > release-results/push.log 2>&1

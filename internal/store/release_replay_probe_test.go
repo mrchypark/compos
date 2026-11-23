@@ -9,14 +9,21 @@ import (
 	"github.com/mrchypark/rhiza"
 )
 
-func TestArchiveRecoveryRetainsRequestReplay(t *testing.T) {
+// This checks replay after graceful close, not abrupt process or host failure.
+func TestReleaseSingleNodeReplay(t *testing.T) {
+	for _, provider := range releaseProviders() {
+		t.Run(provider, func(t *testing.T) { testArchiveRecoveryRetainsRequestReplay(t, provider) })
+	}
+}
+
+func testArchiveRecoveryRetainsRequestReplay(t *testing.T, provider string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	config := rhiza.Config{
 		ClusterID: "release-replay", NodeID: "node-1", DataDir: t.TempDir(),
-		PeerAddr: "127.0.0.1:0", ObjStoreProvider: rhiza.ObjectStoreProviderFilesystem,
-		ObjStoreDir: t.TempDir(), ObjStoreDurability: rhiza.ObjectStoreDurabilityBeforeAck,
+		PeerAddr: "127.0.0.1:0", ObjStoreDurability: rhiza.ObjectStoreDurabilityBeforeAck,
 	}
+	configureReleaseProvider(t, ctx, provider, &config)
 	original, err := OpenRhiza(ctx, config)
 	if err != nil {
 		t.Fatal(err)
