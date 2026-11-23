@@ -13,14 +13,14 @@ blocked=0
 for name in TestReleaseSingleNodeArchiveRecovery TestReleaseSingleNodeReplay TestReleaseSingleNodeProviderFencing; do
   if ! jq -se --arg name "$name" \
     'any(.[]; .Action == "pass" and .Test == $name) and
-     all(.[]; .Action != "skip" and .Action != "fail")' "$results/storage.jsonl" >/dev/null; then
+     all(.[]; (((.Test // "") | . == $name or startswith($name + "/")) | not) or (.Action != "skip" and .Action != "fail"))' "$results/storage.jsonl" >/dev/null; then
     echo "BLOCKED: required real storage test missing, skipped, or failed: $name" >&2
     blocked=1
   fi
   for provider in filesystem s3 gcs azure; do
     if jq -se --arg name "$name/$provider" \
       'any(.[]; .Action == "pass" and .Test == $name) and
-       all(.[]; .Action != "skip" and .Action != "fail")' "$results/storage.jsonl" >/dev/null; then
+       all(.[]; (((.Test // "") | . == $name or startswith($name + "/")) | not) or (.Action != "skip" and .Action != "fail"))' "$results/storage.jsonl" >/dev/null; then
       printf '%s=%s\n' "$name/$provider" passed >> "$results/storage-coverage.env"
     else
       printf '%s=%s\n' "$name/$provider" blocked >> "$results/storage-coverage.env"

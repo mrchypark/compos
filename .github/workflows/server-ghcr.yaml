@@ -48,7 +48,7 @@ jobs:
       - name: Go tests including typed queries and credential-free HTTP
         run: go test -json -count=1 -timeout=20m ./... > release-results/go-tests.jsonl 2>&1
       - name: Required single-node archive recovery and provider fencing
-        run: sh scripts/release/storage-gate.sh release-results
+        run: sh scripts/release/storage-gate-floci.sh release-results
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v7.0.1
