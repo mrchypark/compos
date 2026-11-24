@@ -17,29 +17,6 @@ on:
       - ".github/workflows/test.yaml"
 
 jobs:
-  ruleset-token-diagnostic:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          persist-credentials: false
-      - name: Check ruleset API visibility
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          data=$(gh api "repos/$GITHUB_REPOSITORY/rulesets/27966388")
-          printf '%s\n' "$data" | jq '{target, enforcement, bypass_actors_visible: has("bypass_actors"), ref_conditions_visible: has("conditions"), rules_visible: has("rules")}'
-          if sh scripts/release/tag-protection.sh "$GITHUB_REPOSITORY" v0.1.1; then
-            echo 'Protection guard: accepted'
-          else
-            echo 'Protection guard: rejected'
-          fi
-
   test:
     runs-on: ubuntu-24.04
     steps:
