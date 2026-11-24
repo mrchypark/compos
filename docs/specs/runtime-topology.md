@@ -17,6 +17,22 @@ supports one active server per database. `standalone/rhiza` runs one embedded
 Rhiza node. `ha/rhiza` uses multiple Rhiza members and requires object-store
 `before-ack` durability. No standalone database server is started.
 
+Compos leaves `Local` false. With no members configured, Rhiza uses a QuePaxa
+single voter with quorum one; copies of one identity in separate data directories
+form independent quorums and do not automatically fence one another. For this
+configuration and Rhiza Local mode, deployments using object storage must ensure
+a single writer and stop the previous process and all outstanding operations
+before replacement. Release recovery tests do not verify deployment enforcement.
+Switching existing Compos data to Local mode is unsupported because compatibility
+has not been verified. HA relies on quorum and authenticated learner/membership
+replacement, not physical process kill.
+
+After HA quorum loss, a write timeout or `ErrCommitUnknown` has an unknown
+outcome. At the Rhiza API boundary, retain the same request ID and use
+`ResolveExecute` after recovery; do not blindly retry the write. Compos does not
+currently expose that resolution operation, so its handling of unknown outcomes
+requires separate verification before claiming this recovery path is supported.
+
 The CLI, local request ledger, embedded web console, Rust operator, Helm chart,
 and CRDs have been removed. Kubernetes deployment is direct manifest or an
 external deployment system.

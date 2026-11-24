@@ -17,8 +17,8 @@ materialization.
 SQLite mode keeps the interactive transaction handlers. Rhiza mode plans each
 Kernel command from linearizable reads, reasserts every consumed condition in
 one atomic `Statements` command, and commits only through the quorum. Runtime
-support writes such as workspace provisioning, callback ingress, outbox status,
-and authentication bindings use the same replicated statement boundary.
+support writes such as workspace provisioning, callback ingress, and outbox
+status use the same replicated statement boundary.
 
 `COMPOS_RHIZA_DATA_DIR` enables this mode. Cluster identity, node identity,
 private peer address, fixed members, and S3-compatible shared object-store

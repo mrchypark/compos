@@ -43,6 +43,7 @@ jobs:
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/test.yaml .github/workflows/server-ghcr.yaml
           sh scripts/release/storage-gate-test.sh
+          sh scripts/release/ha-quorum-gate-test.sh
 
       - name: Docker Go version
         run: |
