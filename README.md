@@ -188,6 +188,10 @@ have no exclusions; wildcard includes and exclusions are rejected. Configure
 the `RELEASE_RULESET_TOKEN` Actions secret with a repository-scoped credential
 that has write access to the ruleset, so GitHub returns its bypass actors. The
 release fails closed if the secret, ruleset details, or protection is missing.
+The workflow's `GITHUB_TOKEN` cannot replace this credential: a GitHub Actions
+diagnostic with the release job's permissions received rules and ref conditions
+but not `bypass_actors`, so the guard rejected the protected tag. Candidate
+builds with an empty tag input do not require this credential.
 The workflow checks protection before creating and before publishing the draft;
 ruleset administrators must keep the protection active throughout the release.
 A failed publication can leave a draft release;

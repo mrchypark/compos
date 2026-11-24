@@ -180,7 +180,10 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git check-ref-format "refs/tags/$RELEASE_TAG"
-          test -n "$RELEASE_RULESET_TOKEN"
+          if [ -z "$RELEASE_RULESET_TOKEN" ]; then
+            echo 'Release blocked: ruleset write access is required to verify bypass actors.' >&2
+            exit 1
+          fi
           check_tag_protection() {
             GH_TOKEN="$RELEASE_RULESET_TOKEN" sh scripts/release/tag-protection.sh "$GITHUB_REPOSITORY" "$RELEASE_TAG"
           }
