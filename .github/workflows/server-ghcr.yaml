@@ -69,7 +69,9 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Validate storage gate fixtures
-        run: sh scripts/release/storage-gate-test.sh
+        run: |
+          sh scripts/release/storage-gate-test.sh
+          sh scripts/release/ha-quorum-gate-test.sh
       - name: Required HA quorum-loss recovery
         run: sh scripts/release/ha-quorum-gate.sh release-results
       - name: Go tests including typed queries and credential-free HTTP

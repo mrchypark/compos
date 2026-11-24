@@ -131,6 +131,17 @@ func TestEmbeddedRhizaThreePeersKeepWritingAfterOneStops(t *testing.T) {
 	if err := stores[1].ReadRow(ctx, ReadLinearizable, `SELECT COUNT(*) FROM workspaces WHERE id IN ('before-stop','after-stop')`).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("committed workspace count=%d err=%v", count, err)
 	}
+	for {
+		err := stores[0].ReadRow(ctx, ReadLocal, `SELECT COUNT(*) FROM workspaces WHERE id='after-stop'`).Scan(&count)
+		if err == nil && count == 1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("surviving peer did not catch up before quorum loss: count=%d err=%v", count, err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 	lost := config(2)
 	lost.DataDir = t.TempDir()
 	if unexpected, err := OpenRhiza(ctx, lost); !errors.Is(err, rhiza.ErrVoterStateLost) {
@@ -174,12 +185,18 @@ func TestEmbeddedRhizaThreePeersKeepWritingAfterOneStops(t *testing.T) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	if err := recovered.Exec(ctx, "cluster-after-quorum", `INSERT INTO workspaces(id,key,name,version,created_at,updated_at) VALUES('after-quorum','after-quorum','after-quorum',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
+	control := rhiza.ExecuteRequest{RequestID: "cluster-after-quorum", SQL: `INSERT INTO workspaces(id,key,name,version,created_at,updated_at) VALUES('after-quorum','after-quorum','after-quorum',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`}
+	if err := recovered.Exec(ctx, control.RequestID, control.SQL); err != nil {
 		t.Fatalf("write after quorum recovery: %v", err)
 	}
 	if err := recovered.ReadRow(ctx, ReadLinearizable, `SELECT COUNT(*) FROM workspaces WHERE id IN ('before-stop','after-stop','after-quorum')`).Scan(&count); err != nil || count != 3 {
 		t.Fatalf("acknowledged writes after quorum recovery: count=%d err=%v", count, err)
 	}
+	confirmed, err := recovered.rhiza.ResolveExecute(ctx, control)
+	if err != nil || confirmed.State != rhiza.ResolveExecuteRetained || confirmed.Receipt == nil || confirmed.Receipt.Status != rhiza.MutationCommitted {
+		t.Fatalf("resolve acknowledged control request: result=%+v err=%v", confirmed, err)
+	}
+	t.Log("acknowledged control request resolved as committed")
 	resolved, err := recovered.rhiza.ResolveExecute(ctx, request)
 	if err != nil {
 		t.Fatalf("resolve unacknowledged request after recovery: %v", err)
