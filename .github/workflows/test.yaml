@@ -2,7 +2,8 @@ name: test compos
 
 on:
   push:
-    paths: &test_paths
+  pull_request:
+    paths:
       - "go.mod"
       - "go.sum"
       - "cmd/**"
@@ -14,8 +15,6 @@ on:
       - ".github/workflows/server-ghcr.yaml"
       - ".github/workflows/server-binaries.yaml"
       - ".github/workflows/test.yaml"
-  pull_request:
-    paths: *test_paths
 
 jobs:
   test:
