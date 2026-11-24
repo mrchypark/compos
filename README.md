@@ -182,5 +182,13 @@ tag against that commit, then publishes a GitHub release containing those
 archives, `SHA256SUMS`, and `SOURCE_SHA`. Leave the tag input empty to build a
 candidate without publishing. Candidates from earlier runs are not published;
 the release uses only the candidate built in its own run. Protect the release
-tag from updates and deletion. A failed publication can leave a draft release;
+tag from updates and deletion with an active tag ruleset that has no bypass
+actors. The ruleset must explicitly include the full tag ref (or `~ALL`) and
+have no exclusions; wildcard includes and exclusions are rejected. Configure
+the `RELEASE_RULESET_TOKEN` Actions secret with a repository-scoped credential
+that has write access to the ruleset, so GitHub returns its bypass actors. The
+release fails closed if the secret, ruleset details, or protection is missing.
+The workflow checks protection before creating and before publishing the draft;
+ruleset administrators must keep the protection active throughout the release.
+A failed publication can leave a draft release;
 inspect it before retrying.

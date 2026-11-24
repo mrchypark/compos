@@ -45,6 +45,7 @@ jobs:
           sh scripts/release/storage-gate-test.sh
           sh scripts/release/ha-quorum-gate-test.sh
           sh scripts/release/server-binary-checksums-test.sh
+          sh scripts/release/tag-protection-test.sh
 
       - name: Docker Go version
         run: |

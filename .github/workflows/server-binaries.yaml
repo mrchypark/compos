@@ -174,11 +174,16 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           TEST_RUN: ${{ inputs.test_run }}
           GHCR_RUN: ${{ inputs.ghcr_run }}
+          RELEASE_RULESET_TOKEN: ${{ secrets.RELEASE_RULESET_TOKEN }}
         run: |
           set -eu
           test "$GITHUB_REF" = refs/heads/main
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git check-ref-format "refs/tags/$RELEASE_TAG"
+          test -n "$RELEASE_RULESET_TOKEN"
+          check_tag_protection() {
+            GH_TOKEN="$RELEASE_RULESET_TOKEN" sh scripts/release/tag-protection.sh "$GITHUB_REPOSITORY" "$RELEASE_TAG"
+          }
           check_tag() {
             ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")
             type=$(printf '%s' "$ref" | jq -r .object.type)
@@ -190,6 +195,7 @@ jobs:
             fi
             test "$type" = commit && test "$sha" = "$GITHUB_SHA"
           }
+          check_tag_protection
           check_tag
           for run in "$TEST_RUN" "$GHCR_RUN"; do
             case "$run" in ''|*[!0-9]*) exit 1;; esac
@@ -199,6 +205,9 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GHCR_RUN/jobs?per_page=100" | jq -e '[.jobs[] | select(.name == "verify" or .name == "recovery") | select(.conclusion == "success") | .name] | unique | sort == ["recovery", "verify"]' > /dev/null
           test "$(cat dist/SOURCE_SHA)" = "$GITHUB_SHA"
           (cd dist && sha256sum -c SHA256SUMS)
+          check_tag_protection
+          check_tag
           gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" dist/composd-*.tar.gz dist/SHA256SUMS dist/SOURCE_SHA
+          check_tag_protection
           check_tag
           gh release edit "$RELEASE_TAG" --draft=false
