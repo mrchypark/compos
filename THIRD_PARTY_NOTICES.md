@@ -66,7 +66,7 @@ SOFTWARE.
 
 ## Additional Linux binary notices
 
-The Linux amd64 server dependency graph (CGO enabled) and search-syncer dependency graph (CGO disabled) were obtained with `go list -deps` from the root module using Go 1.27.4. The versioned module list, cached license, copyright, patent and NOTICE files, and Go license and patent text are reproduced in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt). Some included nested texts may apply only to unused upstream files. The dependency graph may differ on other architectures or with other build settings; update and review the notices for each release.
+The Linux amd64 server dependency graph (CGO enabled) and search-syncer dependency graph (CGO disabled) were obtained with `go list -deps` from the root module using Go 1.27.4. Selected versioned module license, copyright, patent and NOTICE files, and Go license and patent text are reproduced in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt). The bundle omits Rhiza's MIT notices under separate permission granted for Compos binary distributions. This permission does not cover other third-party notices or other forms of distribution. Some included nested texts may apply only to unused upstream files. The dependency graph may differ on other architectures or with other build settings; update and review the notices for each release.
 
 ### SQLite translation and supporting code
 
