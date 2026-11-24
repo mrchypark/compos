@@ -160,19 +160,29 @@ remaining notice review.
 ## Server binaries
 
 The `verify server binaries` workflow is intended to build `composd` for Linux, macOS and
-Windows on amd64 and arm64, with CGO disabled. It smoke-tests each extracted
-archive on a matching runner. Windows builds currently fail in the Rhiza
+Windows on amd64 and arm64, with CGO disabled. It tests SQLite and Rhiza writes,
+reads and restart recovery using each extracted archive on a matching runner.
+These archives contain the server; `compos-search-syncer` is a separate binary.
+Windows builds currently fail in the Rhiza
 dependency; no complete release artifact is produced until that is fixed. After
 all jobs pass, the `composd-candidate` workflow artifact contains six archives,
 their licenses, `SHA256SUMS`, and `SOURCE_SHA`. A pull request run normally
 builds GitHub's synthetic merge commit, recorded in `SOURCE_SHA`; it is a
 candidate, not a release. Verify the downloads with
-`sha256sum -c SHA256SUMS` (or an equivalent SHA-256 tool). Run `composd` as in
+`sha256sum -c SHA256SUMS` (or an equivalent SHA-256 tool) to check integrity,
+not reproducibility. Run `composd` as in
 the direct server example above.
 
-After merging, run the binary workflow and the `verify and publish server GHCR`
-workflow without publishing on the intended release commit. Publish only after
-all binary jobs and both the GHCR workflow's `verify` and `recovery` jobs pass,
-and after confirming their run commit SHAs and the candidate's `SOURCE_SHA` are
-identical to the intended release commit. The binary workflow never publishes;
-publication is coordinated separately after these checks.
+After a coordinated merge, confirm the `test compos` workflow passed and dispatch the
+`verify and publish server GHCR` workflow without publishing on the intended
+main commit. Review the applicable third-party notices for all six targets.
+Once those gates pass and publication is coordinated, create a release tag at
+that exact commit and dispatch `verify server binaries` on main with the existing
+tag and the successful test and GHCR run IDs. The workflow rebuilds and tests all
+six archives, verifies their checksums and source SHA, checks both runs and the
+tag against that commit, then publishes a GitHub release containing those
+archives, `SHA256SUMS`, and `SOURCE_SHA`. Leave the tag input empty to build a
+candidate without publishing. Candidates from earlier runs are not published;
+the release uses only the candidate built in its own run. Protect the release
+tag from updates and deletion. A failed publication can leave a draft release;
+inspect it before retrying.

@@ -2,6 +2,16 @@ name: verify server binaries
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag at this main commit (empty for candidate only)
+        type: string
+      test_run:
+        description: Successful test compos run ID for this commit
+        type: string
+      ghcr_run:
+        description: Successful GHCR verification run ID for this commit
+        type: string
   pull_request:
     paths:
       - 'go.mod'
@@ -87,21 +97,40 @@ jobs:
           $port = $listener.LocalEndpoint.Port
           $listener.Stop()
           $exe = (Resolve-Path "extracted/$binary").Path
-          $database = Join-Path (Resolve-Path smoke).Path 'compos.sqlite'
-          $process = Start-Process -FilePath $exe -ArgumentList @('-bind', "127.0.0.1:$port", '-database', $database) -PassThru -RedirectStandardOutput smoke/stdout.log -RedirectStandardError smoke/stderr.log
-          try {
-            $healthy = $false
-            for ($i = 0; $i -lt 60; $i++) {
-              if ($process.HasExited) { throw "server exited: $(Get-Content smoke/stderr.log -Raw)" }
+          $root = (Resolve-Path smoke).Path
+          $url = "http://127.0.0.1:$port"
+          foreach ($backend in 'sqlite', 'rhiza') {
+            $storage = if ($backend -eq 'sqlite') { @('-database', "$root/compos.sqlite") } else { @('-rhiza-data', "$root/rhiza") }
+            $workspace = @{ name = 'Smoke'; key = 'smoke'; idempotency_key = 'smoke-workspace' } | ConvertTo-Json
+            for ($attempt = 0; $attempt -lt 2; $attempt++) {
+              $process = Start-Process -FilePath $exe -ArgumentList (@('-bind', "127.0.0.1:$port") + $storage) -PassThru -RedirectStandardOutput "$root/$backend-$attempt.out" -RedirectStandardError "$root/$backend-$attempt.err"
               try {
-                $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/v1/health" -TimeoutSec 2
-                if ($response.StatusCode -eq 200) { $healthy = $true; break }
-              } catch { Start-Sleep -Seconds 1 }
+                $healthy = $false
+                for ($i = 0; $i -lt 60; $i++) {
+                  if ($process.HasExited) { throw "server exited: $(Get-Content "$root/$backend-$attempt.err" -Raw)" }
+                  try {
+                    $response = Invoke-WebRequest -Uri "$url/api/v1/health" -TimeoutSec 2
+                    if ($response.StatusCode -eq 200) { $healthy = $true; break }
+                  } catch { Start-Sleep -Seconds 1 }
+                }
+                if (!$healthy) { throw "$backend server did not become healthy" }
+                $created = Invoke-RestMethod -Method Post -Uri "$url/api/v1/workspaces" -ContentType 'application/json' -Body $workspace
+                if ($attempt -eq 0) {
+                  if (!$created.data.created -or !$created.data.id) { throw "$backend workspace was not created" }
+                  $id = $created.data.id
+                  $command = @{ command_id = 'smoke-command'; idempotency_key = 'smoke-command'; workspace_id = $id; requested_actor = @{ type = 'user'; id = 'smoke' }; command_type = 'object_type.define'; target = @{ aggregate_type = 'object_type'; aggregate_id = $null }; preconditions = @(); payload = @{ key = 'orders'; singular = 'Order'; plural = 'Orders'; field_schema = @{ type = 'object' } }; causation = @{ source = 'api'; attempt_id = $null; event_id = $null } } | ConvertTo-Json -Depth 10
+                  $result = Invoke-RestMethod -Method Post -Uri "$url/api/v1/kernel/commands" -ContentType 'application/json' -Body $command
+                  if ($result.outcome -ne 'applied') { throw "$backend command was not applied" }
+                } elseif ($created.data.created -or $created.data.id -ne $id -or $created.data.status -ne 'duplicate') {
+                  throw "$backend workspace did not survive restart"
+                }
+                $events = Invoke-RestMethod -Uri "$url/api/v1/workspaces/$id/projection/events?after=0&limit=10"
+                if (!($events.events | Where-Object { $_.workspace_id -eq $id -and $_.event_type -eq 'object_type.defined' })) { throw "$backend persisted event missing" }
+              } finally {
+                if (!$process.HasExited) { Stop-Process -Id $process.Id -Force }
+                $process.WaitForExit()
+              }
             }
-            if (!$healthy) { throw "server did not become healthy: $(Get-Content smoke/stderr.log -Raw)" }
-          } finally {
-            if (!$process.HasExited) { Stop-Process -Id $process.Id -Force }
-            $process.WaitForExit()
           }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -130,9 +159,70 @@ jobs:
           cat composd-*.sha256 | sort -k 2 > SHA256SUMS
           test "$(wc -l < SHA256SUMS)" -eq 6
           sha256sum -c SHA256SUMS
+          for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            test -f "composd-$target.tar.gz"
+            grep -Fx "$(sha256sum "composd-$target.tar.gz")" SHA256SUMS
+          done
+          for target in windows-amd64 windows-arm64; do
+            test -f "composd-$target.zip"
+            grep -Fx "$(sha256sum "composd-$target.zip")" SHA256SUMS
+          done
           rm composd-*.sha256 composd-*.source
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: composd-candidate
           path: dist/*
           if-no-files-found: error
+
+  release:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    needs: checksums
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: composd-candidate
+          path: dist
+      - name: Verify release gates and publish
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          TEST_RUN: ${{ inputs.test_run }}
+          GHCR_RUN: ${{ inputs.ghcr_run }}
+        run: |
+          set -eu
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+          check_tag() {
+            ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")
+            type=$(printf '%s' "$ref" | jq -r .object.type)
+            sha=$(printf '%s' "$ref" | jq -r .object.sha)
+            if [ "$type" = tag ]; then
+              ref=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha")
+              type=$(printf '%s' "$ref" | jq -r .object.type)
+              sha=$(printf '%s' "$ref" | jq -r .object.sha)
+            fi
+            test "$type" = commit && test "$sha" = "$GITHUB_SHA"
+          }
+          check_tag
+          for run in "$TEST_RUN" "$GHCR_RUN"; do
+            case "$run" in ''|*[!0-9]*) exit 1;; esac
+          done
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TEST_RUN" | jq -e --arg sha "$GITHUB_SHA" '.head_sha == $sha and .head_branch == "main" and .event == "push" and .path == ".github/workflows/test.yaml" and .status == "completed" and .conclusion == "success"' > /dev/null
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GHCR_RUN" | jq -e --arg sha "$GITHUB_SHA" '.head_sha == $sha and .path == ".github/workflows/server-ghcr.yaml" and .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success"' > /dev/null
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GHCR_RUN/jobs?per_page=100" | jq -e '[.jobs[] | select(.name == "verify" or .name == "recovery") | select(.conclusion == "success") | .name] | unique | sort == ["recovery", "verify"]' > /dev/null
+          test "$(cat dist/SOURCE_SHA)" = "$GITHUB_SHA"
+          (cd dist && sha256sum -c SHA256SUMS)
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" dist/composd-*.tar.gz dist/composd-*.zip dist/SHA256SUMS dist/SOURCE_SHA
+          check_tag
+          gh release edit "$RELEASE_TAG" --draft=false
