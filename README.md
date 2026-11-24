@@ -156,3 +156,15 @@ Compos is licensed under the [Apache License 2.0](LICENSE). See the
 [third-party notices](THIRD_PARTY_NOTICES.md) and
 [third-party license texts](THIRD_PARTY_LICENSES.txt) for dependencies and
 remaining notice review.
+
+## Server binaries
+
+The `verify server binaries` workflow is intended to build `composd` for Linux, macOS and
+Windows on amd64 and arm64, with CGO disabled. It smoke-tests each extracted
+archive on a matching runner. Windows builds currently fail in the Rhiza
+dependency; no complete release artifact is produced until that is fixed. After
+all jobs pass, the `composd-release` workflow artifact contains
+six archives, their licenses and `SHA256SUMS`; verify the downloads with
+`sha256sum -c SHA256SUMS` (or an equivalent SHA-256 tool). Run `composd` as in
+the direct server example above. The workflow does not publish a release;
+publication is coordinated separately after all release gates pass.

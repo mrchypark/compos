@@ -1,0 +1,128 @@
+name: verify server binaries
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'cmd/server/**'
+      - 'internal/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'THIRD_PARTY_LICENSES.txt'
+      - '.github/workflows/server-binaries.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux, arch: amd64, runner: ubuntu-24.04 }
+          - { os: linux, arch: arm64, runner: ubuntu-24.04-arm }
+          - { os: darwin, arch: amd64, runner: macos-15-intel }
+          - { os: darwin, arch: arm64, runner: macos-15 }
+          - { os: windows, arch: amd64, runner: windows-2025 }
+          - { os: windows, arch: arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CGO_ENABLED: '0'
+      GOOS: ${{ matrix.os }}
+      GOARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+      - name: Build and package
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = "composd-$env:GOOS-$env:GOARCH"
+          $binary = if ($env:GOOS -eq 'windows') { 'composd.exe' } else { 'composd' }
+          New-Item -ItemType Directory -Path package, dist | Out-Null
+          go build -trimpath -ldflags='-s -w' -o "package/$binary" ./cmd/server
+          if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md, THIRD_PARTY_LICENSES.txt package/
+          if ($env:GOOS -eq 'windows') {
+            $archive = "$name.zip"
+            Compress-Archive -Path package/* -DestinationPath "dist/$archive"
+          } else {
+            $archive = "$name.tar.gz"
+            tar -czf "dist/$archive" -C package .
+            if ($LASTEXITCODE -ne 0) { throw 'tar failed' }
+          }
+          "$((Get-FileHash "dist/$archive" -Algorithm SHA256).Hash.ToLower())  $archive" | Set-Content -Encoding ascii "dist/$name.sha256"
+      - name: Smoke test extracted archive
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = "composd-$env:GOOS-$env:GOARCH"
+          $binary = if ($env:GOOS -eq 'windows') { 'composd.exe' } else { 'composd' }
+          New-Item -ItemType Directory -Path extracted, smoke | Out-Null
+          if ($env:GOOS -eq 'windows') {
+            Expand-Archive "dist/$name.zip" extracted
+          } else {
+            tar -xzf "dist/$name.tar.gz" -C extracted
+            if ($LASTEXITCODE -ne 0) { throw 'archive extraction failed' }
+          }
+          foreach ($file in $binary, 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.txt') {
+            if (!(Test-Path "extracted/$file")) { throw "archive missing $file" }
+          }
+          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          $listener.Start()
+          $port = $listener.LocalEndpoint.Port
+          $listener.Stop()
+          $exe = (Resolve-Path "extracted/$binary").Path
+          $database = Join-Path (Resolve-Path smoke).Path 'compos.sqlite'
+          $process = Start-Process -FilePath $exe -ArgumentList @('-bind', "127.0.0.1:$port", '-database', $database) -PassThru -RedirectStandardOutput smoke/stdout.log -RedirectStandardError smoke/stderr.log
+          try {
+            $healthy = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              if ($process.HasExited) { throw "server exited: $(Get-Content smoke/stderr.log -Raw)" }
+              try {
+                $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/v1/health" -TimeoutSec 2
+                if ($response.StatusCode -eq 200) { $healthy = $true; break }
+              } catch { Start-Sleep -Seconds 1 }
+            }
+            if (!$healthy) { throw "server did not become healthy: $(Get-Content smoke/stderr.log -Raw)" }
+          } finally {
+            if (!$process.HasExited) { Stop-Process -Id $process.Id -Force }
+            $process.WaitForExit()
+          }
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: composd-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  checksums:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verify and combine checksums
+        shell: sh
+        run: |
+          set -eu
+          cd dist
+          cat composd-*.sha256 | sort -k 2 > SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 6
+          sha256sum -c SHA256SUMS
+          rm composd-*.sha256
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: composd-release
+          path: dist/*
+          if-no-files-found: error

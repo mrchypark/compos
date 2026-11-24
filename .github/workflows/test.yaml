@@ -12,6 +12,7 @@ on:
       - "docs/**"
       - "Dockerfile"
       - ".github/workflows/server-ghcr.yaml"
+      - ".github/workflows/server-binaries.yaml"
       - ".github/workflows/test.yaml"
   pull_request:
     paths: *test_paths
@@ -41,7 +42,7 @@ jobs:
 
       - name: Validate GitHub workflows and storage gate
         run: |
-          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/test.yaml .github/workflows/server-ghcr.yaml
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/test.yaml .github/workflows/server-ghcr.yaml .github/workflows/server-binaries.yaml
           sh scripts/release/storage-gate-test.sh
           sh scripts/release/ha-quorum-gate-test.sh
 
