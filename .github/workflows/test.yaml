@@ -44,6 +44,7 @@ jobs:
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/test.yaml .github/workflows/server-ghcr.yaml .github/workflows/server-binaries.yaml
           sh scripts/release/storage-gate-test.sh
           sh scripts/release/ha-quorum-gate-test.sh
+          sh scripts/release/server-binary-checksums-test.sh
 
       - name: Docker Go version
         run: |
