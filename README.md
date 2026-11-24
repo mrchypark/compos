@@ -65,6 +65,14 @@ The product's highest-level vocabulary and boundaries are defined by the
   production canonical commits, checkpoint bootstrap, replicated logs, and
   recovery. A single Rhiza node with remote `before-ack` durability can recover
   from object storage, but does not provide multi-node HA.
+  With no members configured, Compos leaves `Local` false: Rhiza uses a
+  QuePaxa single voter with quorum one. Copies of the same identity in separate
+  data directories form independent single-voter quorums and do not fence one
+  another. Production deployments must ensure a single writer for the object
+  storage namespace and stop the prior process and all its outstanding
+  operations before replacement. This prerequisite also applies to Rhiza Local
+  mode. Release recovery tests do not enforce it. Switching existing Compos data
+  to Local mode is not supported: compatibility has not been verified.
 - Compos has no authentication or authorization mode. HTTP routes accept requests
   without credentials and attribute every request to the fixed principal `local`.
   Protected deployments must enforce access control and authenticate callers at

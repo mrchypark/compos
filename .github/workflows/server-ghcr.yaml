@@ -61,15 +61,20 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           printf '%s\n' "$GITHUB_SHA" > release-results/source-sha.txt
           printf '%s\n' 'Upstream authentication gateway integration is not covered.' \
-            'Storage gates require real eventual archive recovery, replay, and provider fencing tests; async writes can be lost before archival.' \
+            'Single-voter storage gates test archive recovery, replay, and process-termination recovery on filesystem and emulators; they do not enforce single-writer deployment or stale-writer fencing.' \
+            'Production prerequisite: deployment must ensure one writer for a single-voter or Local namespace and stop the prior process and outstanding operations before replacement; async writes can be lost before archival.' \
             > release-results/coverage.txt
       - uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: false
+      - name: Validate storage gate fixtures
+        run: sh scripts/release/storage-gate-test.sh
+      - name: Required HA quorum-loss recovery
+        run: sh scripts/release/ha-quorum-gate.sh release-results
       - name: Go tests including typed queries and credential-free HTTP
         run: go test -json -count=1 -timeout=20m ./... > release-results/go-tests.jsonl 2>&1
-      - name: Required single-node archive recovery and provider fencing
+      - name: Required single-node recovery, replay and process termination
         run: sh scripts/release/storage-gate-floci.sh release-results
       - name: Upload verification evidence
         if: always()

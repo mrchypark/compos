@@ -5,7 +5,7 @@ results=${1:?results directory required}
 mode=${2:-full}
 case "$mode" in
   recovery) tests='ArchiveRecovery|Replay|CrashRecovery'; names='ArchiveRecovery Replay CrashRecovery' ;;
-  full) tests='ArchiveRecovery|Replay|CrashRecovery|ProviderFencing'; names='ArchiveRecovery Replay CrashRecovery ProviderFencing' ;;
+  full) tests='ArchiveRecovery|Replay|CrashRecovery'; names='ArchiveRecovery Replay CrashRecovery' ;;
   *) echo "unknown storage gate mode: $mode" >&2; exit 2 ;;
 esac
 mkdir -p "$results"

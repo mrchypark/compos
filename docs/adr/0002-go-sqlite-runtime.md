@@ -13,11 +13,9 @@ tests, SQLite is that process's single-node canonical store, not a test
 harness. It is not the deployed Rhiza authority. The Rust Kubernetes operator
 does not turn SQLite into a replicated database.
 
-The Go runtime supports Rauthy and PocketBase upstream verification and issues
-opaque hashed Compos sessions. Session lookup derives the principal and logout
-revokes the presented session. Explicit local `none` mode uses the fixed `dev`
-principal and does not trust a caller-supplied principal header; bind that mode
-to loopback or a trusted private boundary.
+Compos does not authenticate or authorize HTTP callers or issue sessions. It
+attributes requests to the fixed principal `local`. Protected deployments must
+authenticate callers and enforce access control at a trusted network boundary.
 
 Every connection enables `foreign_keys`, WAL, a busy timeout, RFC3339 time
 encoding, and immediate write transactions. The pool defaults to eight
