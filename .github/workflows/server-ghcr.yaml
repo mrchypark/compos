@@ -26,11 +26,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-go@v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: false
@@ -38,7 +38,7 @@ jobs:
         run: sh scripts/release/storage-gate-floci.sh recovery-results recovery
       - name: Upload recovery evidence
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: storage-recovery-${{ github.sha }}
           path: recovery-results/
@@ -50,7 +50,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -64,7 +64,7 @@ jobs:
             'Single-voter storage gates test archive recovery, replay, and process-termination recovery on filesystem and emulators; they do not enforce single-writer deployment or stale-writer fencing.' \
             'Production prerequisite: deployment must ensure one writer for a single-voter or Local namespace and stop the prior process and outstanding operations before replacement; async writes can be lost before archival.' \
             > release-results/coverage.txt
-      - uses: actions/setup-go@v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: false
@@ -80,7 +80,7 @@ jobs:
         run: sh scripts/release/storage-gate-floci.sh release-results
       - name: Upload verification evidence
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: server-verification-${{ github.sha }}
           path: release-results/
@@ -96,7 +96,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -108,7 +108,7 @@ jobs:
           image="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]'):sha-$GITHUB_SHA"
           echo "SERVER_IMAGE=$image" >> "$GITHUB_ENV"
           printf '%s\n' "$GITHUB_SHA" > release-results/source-sha.txt
-      - uses: docker/setup-buildx-action@v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build server only and load before smoke
         shell: sh
         run: |
@@ -120,7 +120,7 @@ jobs:
         run: sh scripts/release/server-smoke.sh "$SERVER_IMAGE" release-results
       - name: Login to GHCR
         if: inputs.publish && needs.verify.result == 'success' && needs.recovery.result == 'success'
-        uses: docker/login-action@v4.4.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -136,7 +136,7 @@ jobs:
           grep -E '^ghcr.io/.+@sha256:[a-f0-9]{64}$' release-results/repo-digests.txt
       - name: Upload image evidence
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: server-image-${{ github.sha }}
           path: release-results/

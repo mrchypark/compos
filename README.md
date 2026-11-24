@@ -156,3 +156,43 @@ Compos is licensed under the [Apache License 2.0](LICENSE). See the
 [third-party notices](THIRD_PARTY_NOTICES.md) and
 [third-party license texts](THIRD_PARTY_LICENSES.txt) for dependencies and
 remaining notice review.
+
+## Server binaries
+
+The `verify server binaries` workflow builds `composd` for Linux and macOS on
+amd64 and arm64, with CGO disabled. It tests SQLite and Rhiza writes,
+reads and restart recovery using each extracted archive on a matching runner.
+These archives contain the server; `compos-search-syncer` is a separate binary.
+After all jobs pass, the `composd-candidate` workflow artifact contains four archives,
+their licenses, `SHA256SUMS`, and `SOURCE_SHA`. A pull request run normally
+builds GitHub's synthetic merge commit, recorded in `SOURCE_SHA`; it is a
+candidate, not a release. Verify the downloads with
+`sha256sum -c SHA256SUMS` (or an equivalent SHA-256 tool) to check integrity,
+not reproducibility. Run `composd` as in
+the direct server example above.
+
+After a coordinated merge, confirm the `test compos` workflow passed and dispatch the
+`verify and publish server GHCR` workflow without publishing on the intended
+main commit. Review the applicable third-party notices for all four targets.
+Once those gates pass and publication is coordinated, create a release tag at
+that exact commit and dispatch `verify server binaries` on main with the existing
+tag and the successful test and GHCR run IDs. The workflow rebuilds and tests all
+four archives, verifies their checksums and source SHA, checks both runs and the
+tag against that commit, then publishes a GitHub release containing those
+archives, `SHA256SUMS`, and `SOURCE_SHA`. Leave the tag input empty to build a
+candidate without publishing. Candidates from earlier runs are not published;
+the release uses only the candidate built in its own run. Protect the release
+tag from updates and deletion with an active tag ruleset that has no bypass
+actors. The ruleset must explicitly include the full tag ref (or `~ALL`) and
+have no exclusions; wildcard includes and exclusions are rejected. Configure
+the `RELEASE_RULESET_TOKEN` Actions secret with a repository-scoped credential
+that has write access to the ruleset, so GitHub returns its bypass actors. The
+release fails closed if the secret, ruleset details, or protection is missing.
+The workflow's `GITHUB_TOKEN` cannot replace this credential: a GitHub Actions
+diagnostic with the release job's permissions received rules and ref conditions
+but not `bypass_actors`, so the guard rejected the protected tag. Candidate
+builds with an empty tag input do not require this credential.
+The workflow checks protection before creating and before publishing the draft;
+ruleset administrators must keep the protection active throughout the release.
+A failed publication can leave a draft release;
+inspect it before retrying.

@@ -2,7 +2,8 @@ name: test compos
 
 on:
   push:
-    paths: &test_paths
+  pull_request:
+    paths:
       - "go.mod"
       - "go.sum"
       - "cmd/**"
@@ -12,16 +13,15 @@ on:
       - "docs/**"
       - "Dockerfile"
       - ".github/workflows/server-ghcr.yaml"
+      - ".github/workflows/server-binaries.yaml"
       - ".github/workflows/test.yaml"
-  pull_request:
-    paths: *test_paths
 
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Shell syntax
         run: find scripts -name '*.sh' -exec sh -c 'for script do echo "$script"; sh -n "$script" || exit 1; done' sh {} +
@@ -35,15 +35,17 @@ jobs:
         run: shellcheck -S warning scripts/*.sh
 
       - name: Set up Go
-        uses: actions/setup-go@v6.5.0
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
 
       - name: Validate GitHub workflows and storage gate
         run: |
-          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/test.yaml .github/workflows/server-ghcr.yaml
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/test.yaml .github/workflows/server-ghcr.yaml .github/workflows/server-binaries.yaml
           sh scripts/release/storage-gate-test.sh
           sh scripts/release/ha-quorum-gate-test.sh
+          sh scripts/release/server-binary-checksums-test.sh
+          sh scripts/release/tag-protection-test.sh
 
       - name: Docker Go version
         run: |
@@ -62,10 +64,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@v6.5.0
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
 
