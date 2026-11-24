@@ -159,13 +159,11 @@ remaining notice review.
 
 ## Server binaries
 
-The `verify server binaries` workflow is intended to build `composd` for Linux, macOS and
-Windows on amd64 and arm64, with CGO disabled. It tests SQLite and Rhiza writes,
+The `verify server binaries` workflow builds `composd` for Linux and macOS on
+amd64 and arm64, with CGO disabled. It tests SQLite and Rhiza writes,
 reads and restart recovery using each extracted archive on a matching runner.
 These archives contain the server; `compos-search-syncer` is a separate binary.
-Windows builds currently fail in the Rhiza
-dependency; no complete release artifact is produced until that is fixed. After
-all jobs pass, the `composd-candidate` workflow artifact contains six archives,
+After all jobs pass, the `composd-candidate` workflow artifact contains four archives,
 their licenses, `SHA256SUMS`, and `SOURCE_SHA`. A pull request run normally
 builds GitHub's synthetic merge commit, recorded in `SOURCE_SHA`; it is a
 candidate, not a release. Verify the downloads with
@@ -175,11 +173,11 @@ the direct server example above.
 
 After a coordinated merge, confirm the `test compos` workflow passed and dispatch the
 `verify and publish server GHCR` workflow without publishing on the intended
-main commit. Review the applicable third-party notices for all six targets.
+main commit. Review the applicable third-party notices for all four targets.
 Once those gates pass and publication is coordinated, create a release tag at
 that exact commit and dispatch `verify server binaries` on main with the existing
 tag and the successful test and GHCR run IDs. The workflow rebuilds and tests all
-six archives, verifies their checksums and source SHA, checks both runs and the
+four archives, verifies their checksums and source SHA, checks both runs and the
 tag against that commit, then publishes a GitHub release containing those
 archives, `SHA256SUMS`, and `SOURCE_SHA`. Leave the tag input empty to build a
 candidate without publishing. Candidates from earlier runs are not published;

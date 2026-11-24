@@ -22,6 +22,7 @@ on:
       - 'THIRD_PARTY_NOTICES.md'
       - 'THIRD_PARTY_LICENSES.txt'
       - '.github/workflows/server-binaries.yaml'
+      - 'scripts/release/**'
 
 permissions:
   contents: read
@@ -36,8 +37,6 @@ jobs:
           - { os: linux, arch: arm64, runner: ubuntu-24.04-arm }
           - { os: darwin, arch: amd64, runner: macos-15-intel }
           - { os: darwin, arch: arm64, runner: macos-15 }
-          - { os: windows, arch: amd64, runner: windows-2025 }
-          - { os: windows, arch: arm64, runner: windows-11-arm }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     defaults:
@@ -59,7 +58,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $name = "composd-$env:GOOS-$env:GOARCH"
-          $binary = if ($env:GOOS -eq 'windows') { 'composd.exe' } else { 'composd' }
+          $binary = 'composd'
           $source = git rev-parse HEAD
           if ($LASTEXITCODE -ne 0 -or $source -ne $env:GITHUB_SHA) { throw 'checkout does not match workflow SHA' }
           New-Item -ItemType Directory -Path package, dist | Out-Null
@@ -67,28 +66,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md, THIRD_PARTY_LICENSES.txt package/
           Get-Item package, package/* | ForEach-Object { $_.LastWriteTimeUtc = [DateTime]::new(2000, 1, 1, 0, 0, 0, [DateTimeKind]::Utc) }
-          if ($env:GOOS -eq 'windows') {
-            $archive = "$name.zip"
-            Compress-Archive -Path package/* -DestinationPath "dist/$archive"
-          } else {
-            $archive = "$name.tar.gz"
-            tar -czf "dist/$archive" -C package .
-            if ($LASTEXITCODE -ne 0) { throw 'tar failed' }
-          }
+          $archive = "$name.tar.gz"
+          tar -czf "dist/$archive" -C package .
+          if ($LASTEXITCODE -ne 0) { throw 'tar failed' }
           "$((Get-FileHash "dist/$archive" -Algorithm SHA256).Hash.ToLower())  $archive" | Set-Content -Encoding ascii "dist/$name.sha256"
           $source | Set-Content -Encoding ascii "dist/$name.source"
       - name: Smoke test extracted archive
         run: |
           $ErrorActionPreference = 'Stop'
           $name = "composd-$env:GOOS-$env:GOARCH"
-          $binary = if ($env:GOOS -eq 'windows') { 'composd.exe' } else { 'composd' }
+          $binary = 'composd'
           New-Item -ItemType Directory -Path extracted, smoke | Out-Null
-          if ($env:GOOS -eq 'windows') {
-            Expand-Archive "dist/$name.zip" extracted
-          } else {
-            tar -xzf "dist/$name.tar.gz" -C extracted
-            if ($LASTEXITCODE -ne 0) { throw 'archive extraction failed' }
-          }
+          tar -xzf "dist/$name.tar.gz" -C extracted
+          if ($LASTEXITCODE -ne 0) { throw 'archive extraction failed' }
           foreach ($file in $binary, 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.txt') {
             if (!(Test-Path "extracted/$file")) { throw "archive missing $file" }
           }
@@ -209,6 +199,6 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GHCR_RUN/jobs?per_page=100" | jq -e '[.jobs[] | select(.name == "verify" or .name == "recovery") | select(.conclusion == "success") | .name] | unique | sort == ["recovery", "verify"]' > /dev/null
           test "$(cat dist/SOURCE_SHA)" = "$GITHUB_SHA"
           (cd dist && sha256sum -c SHA256SUMS)
-          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" dist/composd-*.tar.gz dist/composd-*.zip dist/SHA256SUMS dist/SOURCE_SHA
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" dist/composd-*.tar.gz dist/SHA256SUMS dist/SOURCE_SHA
           check_tag
           gh release edit "$RELEASE_TAG" --draft=false
