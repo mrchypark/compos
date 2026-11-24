@@ -38,10 +38,11 @@ jobs:
       GOOS: ${{ matrix.os }}
       GOARCH: ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-go@v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
       - name: Build and package
@@ -49,10 +50,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $name = "composd-$env:GOOS-$env:GOARCH"
           $binary = if ($env:GOOS -eq 'windows') { 'composd.exe' } else { 'composd' }
+          $source = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $source -ne $env:GITHUB_SHA) { throw 'checkout does not match workflow SHA' }
           New-Item -ItemType Directory -Path package, dist | Out-Null
           go build -trimpath -ldflags='-s -w' -o "package/$binary" ./cmd/server
           if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md, THIRD_PARTY_LICENSES.txt package/
+          Get-Item package, package/* | ForEach-Object { $_.LastWriteTimeUtc = [DateTime]::new(2000, 1, 1, 0, 0, 0, [DateTimeKind]::Utc) }
           if ($env:GOOS -eq 'windows') {
             $archive = "$name.zip"
             Compress-Archive -Path package/* -DestinationPath "dist/$archive"
@@ -62,6 +66,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'tar failed' }
           }
           "$((Get-FileHash "dist/$archive" -Algorithm SHA256).Hash.ToLower())  $archive" | Set-Content -Encoding ascii "dist/$name.sha256"
+          $source | Set-Content -Encoding ascii "dist/$name.source"
       - name: Smoke test extracted archive
         run: |
           $ErrorActionPreference = 'Stop'
@@ -98,9 +103,9 @@ jobs:
             if (!$process.HasExited) { Stop-Process -Id $process.Id -Force }
             $process.WaitForExit()
           }
-      - uses: actions/upload-artifact@v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: composd-${{ matrix.os }}-${{ matrix.arch }}
+          name: composd-candidate-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
 
@@ -108,7 +113,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v8.0.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true
@@ -117,12 +122,17 @@ jobs:
         run: |
           set -eu
           cd dist
+          test "$(find . -name 'composd-*.source' | wc -l | tr -d ' ')" -eq 6
+          for source in composd-*.source; do
+            test "$(tr -d '\r\n' < "$source")" = "$GITHUB_SHA"
+          done
+          printf '%s\n' "$GITHUB_SHA" > SOURCE_SHA
           cat composd-*.sha256 | sort -k 2 > SHA256SUMS
           test "$(wc -l < SHA256SUMS)" -eq 6
           sha256sum -c SHA256SUMS
-          rm composd-*.sha256
-      - uses: actions/upload-artifact@v7.0.1
+          rm composd-*.sha256 composd-*.source
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: composd-release
+          name: composd-candidate
           path: dist/*
           if-no-files-found: error
