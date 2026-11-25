@@ -90,7 +90,13 @@ jobs:
     # Run image diagnostics even when the separate storage gate is blocked.
     if: ${{ always() && !cancelled() }}
     needs: [verify, recovery]
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, platform: linux/amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, platform: linux/arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
       contents: read
@@ -105,14 +111,14 @@ jobs:
         run: |
           mkdir -p release-results
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          image="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]'):sha-$GITHUB_SHA"
+          image="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]'):sha-$GITHUB_SHA-${{ matrix.arch }}"
           echo "SERVER_IMAGE=$image" >> "$GITHUB_ENV"
           printf '%s\n' "$GITHUB_SHA" > release-results/source-sha.txt
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build server only and load before smoke
         shell: sh
         run: |
-          docker buildx build --target server --platform linux/amd64 --load \
+          docker buildx build --target server --platform "${{ matrix.platform }}" --load \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --tag "$SERVER_IMAGE" --metadata-file release-results/build.json .
           docker image inspect "$SERVER_IMAGE" > release-results/image.json
@@ -138,6 +144,47 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: server-image-${{ github.sha }}
+          name: server-image-${{ matrix.arch }}-${{ github.sha }}
           path: release-results/
           if-no-files-found: error
+
+  image-manifest:
+    if: inputs.publish && needs.verify.result == 'success' && needs.recovery.result == 'success' && needs.image.result == 'success'
+    needs: [verify, recovery, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: server-image-amd64-${{ github.sha }}
+          path: release-results/amd64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: server-image-arm64-${{ github.sha }}
+          path: release-results/arm64
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish multi-arch manifest from smoke-tested digests
+        shell: sh
+        run: |
+          set -eu
+          image="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]'):sha-$GITHUB_SHA"
+          amd64_digest=$(grep -m1 -E '^ghcr.io/.+@sha256:[a-f0-9]{64}$' release-results/amd64/repo-digests.txt)
+          arm64_digest=$(grep -m1 -E '^ghcr.io/.+@sha256:[a-f0-9]{64}$' release-results/arm64/repo-digests.txt)
+          docker buildx imagetools create -t "$image" "$amd64_digest" "$arm64_digest"
+          docker buildx imagetools inspect "$image" > release-results/manifest.txt
+          cat release-results/manifest.txt
+      - name: Upload manifest evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: server-image-manifest-${{ github.sha }}
+          path: release-results/manifest.txt
+          if-no-files-found: warn
