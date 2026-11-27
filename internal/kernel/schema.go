@@ -40,7 +40,7 @@ func validateRegisteredSchema(path string, s map[string]any, depth int) error {
 	if depth > 32 {
 		return reject("schema_mismatch", path+" exceeds maximum nesting depth")
 	}
-	allowed := map[string]bool{"type": true, "properties": true, "required": true, "items": true, "additionalProperties": true, "enum": true, "minLength": true, "maxLength": true, "minimum": true, "maximum": true, "pattern": true, "format": true, "readOnly": true, "state_machine": true, "x-compos-generation": true}
+	allowed := map[string]bool{"type": true, "properties": true, "required": true, "items": true, "additionalProperties": true, "enum": true, "minLength": true, "maxLength": true, "minimum": true, "maximum": true, "pattern": true, "format": true, "readOnly": true, "state_machine": true, "x-compos-generation": true, "field_type": true, "uniqueItems": true}
 	for k := range s {
 		if !allowed[k] {
 			return reject("schema_mismatch", path+" uses unsupported keyword "+k)
@@ -50,6 +50,8 @@ func validateRegisteredSchema(path string, s map[string]any, depth int) error {
 		if _, exists := s["state_machine"]; exists {
 			return reject("schema_mismatch", path+" cannot declare a state_machine")
 		}
+	} else if _, exists := s["field_type"]; exists {
+		return reject("schema_mismatch", path+" cannot declare a field_type")
 	}
 	types, err := schemaTypes(s["type"])
 	if err != nil {
@@ -119,8 +121,18 @@ func validateRegisteredSchema(path string, s map[string]any, depth int) error {
 			return reject("schema_mismatch", path+" has invalid regex format")
 		}
 	}
-	if format, ok := s["format"].(string); ok && !strings.HasPrefix(format, "regex:") && !map[string]bool{"date": true, "date-time": true, "email": true, "uri": true}[format] {
+	if format, ok := s["format"].(string); ok && !strings.HasPrefix(format, "regex:") && !map[string]bool{"date": true, "date-time": true, "email": true, "uri": true, "url": true}[format] {
 		return reject("schema_mismatch", path+" has unsupported format "+format)
+	}
+	if uniqueItems, exists := s["uniqueItems"]; exists {
+		if _, ok := uniqueItems.(bool); !ok {
+			return reject("schema_mismatch", path+" uniqueItems must be boolean")
+		}
+	}
+	if _, exists := s["field_type"]; exists {
+		if err := validateFieldTypeSchema(path, s, types); err != nil {
+			return err
+		}
 	}
 	if additional, exists := s["additionalProperties"]; exists {
 		if _, ok := additional.(bool); !ok {
@@ -263,13 +275,15 @@ func validateFieldValue(value any, field map[string]any, path string) error {
 			case "email":
 				_, err := mail.ParseAddress(text)
 				valid = err == nil
-			case "uri":
-				u, err := url.ParseRequestURI(text)
-				valid = err == nil && u.Scheme != ""
+			case "uri", "url":
+				valid = validURI(text)
 			}
 			if !valid {
 				return reject("schema_mismatch", path+" does not match format")
 			}
+		}
+		if field["field_type"] == "url" && !validURI(text) {
+			return reject("schema_mismatch", path+" must be a valid url")
 		}
 	}
 	if n, ok := number(value); ok {
@@ -290,6 +304,88 @@ func validateFieldValue(value any, field map[string]any, path string) error {
 				return err
 			}
 		}
+		if field["uniqueItems"] == true {
+			for i := 0; i < len(list); i++ {
+				for j := i + 1; j < len(list); j++ {
+					if equalJSON(list[i], list[j]) {
+						return reject("schema_mismatch", path+" must not contain duplicate items")
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validURI(text string) bool {
+	u, err := url.ParseRequestURI(text)
+	return err == nil && u.Scheme != ""
+}
+
+func allowsOnlyBaseType(types []string, target string) bool {
+	hasTarget := false
+	for _, kind := range types {
+		if kind == target {
+			hasTarget = true
+			continue
+		}
+		if kind != "null" {
+			return false
+		}
+	}
+	return hasTarget
+}
+
+func hasStringEnum(s map[string]any) bool {
+	enums, ok := s["enum"].([]any)
+	if !ok || len(enums) == 0 {
+		return false
+	}
+	for _, candidate := range enums {
+		if _, ok := candidate.(string); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func validateFieldTypeSchema(path string, s map[string]any, types []string) error {
+	ft, ok := s["field_type"].(string)
+	if !ok {
+		return reject("schema_mismatch", path+" field_type must be a string")
+	}
+	switch ft {
+	case "select", "status":
+		if !allowsOnlyBaseType(types, "string") {
+			return reject("schema_mismatch", path+" field_type "+ft+" requires string type")
+		}
+		if !hasStringEnum(s) {
+			return reject("schema_mismatch", path+" field_type "+ft+" requires a non-empty string enum")
+		}
+	case "multi_select":
+		if !allowsOnlyBaseType(types, "array") {
+			return reject("schema_mismatch", path+" field_type multi_select requires array type")
+		}
+		items, ok := s["items"].(map[string]any)
+		if !ok {
+			return reject("schema_mismatch", path+".items is required for field_type multi_select")
+		}
+		itemTypes, err := schemaTypes(items["type"])
+		if err != nil || !allowsOnlyBaseType(itemTypes, "string") {
+			return reject("schema_mismatch", path+".items must have string type for field_type multi_select")
+		}
+		if !hasStringEnum(items) {
+			return reject("schema_mismatch", path+".items requires a non-empty string enum for field_type multi_select")
+		}
+	case "url":
+		if !allowsOnlyBaseType(types, "string") {
+			return reject("schema_mismatch", path+" field_type url requires string type")
+		}
+		if format, ok := s["format"].(string); ok && format != "uri" && format != "url" {
+			return reject("schema_mismatch", path+" field_type url cannot use format "+format)
+		}
+	default:
+		return reject("schema_mismatch", path+" has unsupported field_type "+ft)
 	}
 	return nil
 }
